@@ -75,7 +75,8 @@ __global__ void duplicateWithKeys(
 	uint64_t* gaussian_keys_unsorted,
 	uint32_t* gaussian_values_unsorted,
 	int* radii,
-	dim3 grid)
+	dim3 grid,
+	int2* rects)
 {
 	auto idx = cg::this_grid().thread_rank();
 	if (idx >= P)
@@ -88,7 +89,10 @@ __global__ void duplicateWithKeys(
 		uint32_t off = (idx == 0) ? 0 : offsets[idx - 1];
 		uint2 rect_min, rect_max;
 
-		getRect(points_xy[idx], radii[idx], rect_min, rect_max, grid);
+		if(rects == nullptr)
+			getRect(points_xy[idx], radii[idx], rect_min, rect_max, grid);
+		else
+			getRect(points_xy[idx], rects[idx], rect_min, rect_max, grid);
 
 		// For each tile that the bounding rect overlaps, emit a 
 		// key/value pair. The key is |  tile ID  |      depth      |,
@@ -217,6 +221,7 @@ int CudaRasterizer::Rasterizer::forward(
 	const bool prefiltered,
 	float* out_color,
 	int* radii,
+	int* rects,
 	bool debug)
 {
 	const float focal_y = height / (2.0f * tan_fovy);
@@ -269,7 +274,8 @@ int CudaRasterizer::Rasterizer::forward(
 		geomState.conic_opacity,
 		tile_grid,
 		geomState.tiles_touched,
-		prefiltered
+		prefiltered,
+		(int2*)rects
 	), debug)
 
 	// Compute prefix sum over full list of touched tile counts by Gaussians
@@ -294,7 +300,8 @@ int CudaRasterizer::Rasterizer::forward(
 		binningState.point_list_keys_unsorted,
 		binningState.point_list_unsorted,
 		radii,
-		tile_grid)
+		tile_grid,
+		(int2*)rects)
 	CHECK_CUDA(, debug)
 
 	int bit = getHigherMsb(tile_grid.x * tile_grid.y);
