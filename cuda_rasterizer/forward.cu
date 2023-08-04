@@ -228,7 +228,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	const float h_convolution_scaling = sqrt(max(0.000025f, det_cov / det_cov_plus_h_cov));  // max for numerical stability
 
 	// Invert covariance (EWA algorithm)
-	float det = (cov.x * cov.z - cov.y * cov.y);
+	const float det = det_cov_plus_h_cov;
 	if (det == 0.0f)
 		return;
 	float det_inv = 1.f / det;
