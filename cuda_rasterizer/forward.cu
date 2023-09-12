@@ -271,7 +271,9 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	}
 
 	// Store some useful helper data for the next steps.
-	depths[idx] = p_view.z;
+	//	depths[idx] = p_view.z;
+	const auto direction = glm::vec3(p_orig.x, p_orig.y, p_orig.z) - *cam_pos;
+	depths[idx] = direction.x * direction.x + direction.y * direction.y + direction.z * direction.z;
 	radii[idx] = my_radius;
 	points_xy_image[idx] = point_image;
 	// Inverse 2D covariance and opacity neatly pack into one float4
