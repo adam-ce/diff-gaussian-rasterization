@@ -16,4 +16,7 @@
 #define BLOCK_X 16
 #define BLOCK_Y 16
 
+// #define DGR_FIX_AA
+// #define DGR_DIST_BASED_SORTING
+
 #endif

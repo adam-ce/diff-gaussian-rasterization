@@ -202,22 +202,26 @@ __global__ void computeCov2DCUDA(int P,
 	float c_xy = cov2D[0][1];
 	float c_yy = cov2D[1][1];
 
-
 	constexpr float h_var = 0.3f;
+#ifdef DGR_FIX_AA
 	const float det_cov = c_xx * c_yy - c_xy * c_xy;
 	c_xx += h_var;
 	c_yy += h_var;
 	const float det_cov_plus_h_cov = c_xx * c_yy - c_xy * c_xy;
-	const float h_convolution_scaling = sqrt(max(0.000025f, det_cov / det_cov_plus_h_cov));  // max for numerical stability
+	const float h_convolution_scaling = sqrt(max(0.000025f, det_cov / det_cov_plus_h_cov)); // max for numerical stability
 	const float dL_dopacity_v = dL_dopacity[idx];
 	const float d_h_convolution_scaling = dL_dopacity_v * opacities[idx];
 	dL_dopacity[idx] = dL_dopacity_v * h_convolution_scaling;
 	const float d_inside_root = (det_cov / det_cov_plus_h_cov) <= 0.000025f ? 0.f : d_h_convolution_scaling / (2 * h_convolution_scaling);
-
+#else
+	c_xx += h_var;
+	c_yy += h_var;
+#endif
 
 	float dL_dc_xx = 0;
 	float dL_dc_xy = 0;
 	float dL_dc_yy = 0;
+#ifdef DGR_FIX_AA
 	{
 		// https://www.wolframalpha.com/input?i=d+%28%28x*y+-+z%5E2%29%2F%28%28x%2Bw%29*%28y%2Bw%29+-+z%5E2%29%29+%2Fdx
 		// https://www.wolframalpha.com/input?i=d+%28%28x*y+-+z%5E2%29%2F%28%28x%2Bw%29*%28y%2Bw%29+-+z%5E2%29%29+%2Fdz
@@ -225,15 +229,15 @@ __global__ void computeCov2DCUDA(int P,
 		const float y = c_yy;
 		const float z = c_xy;
 		const float w = h_var;
-		const float denom_f = d_inside_root / sq(w*w + w*(x + y) + x * y - z*z);
-		const float dL_dx = w * (w * y + y*y + z*z) * denom_f;
-		const float dL_dy = w * (w * x + x*x + z*z) * denom_f;
+		const float denom_f = d_inside_root / sq(w * w + w * (x + y) + x * y - z * z);
+		const float dL_dx = w * (w * y + y * y + z * z) * denom_f;
+		const float dL_dy = w * (w * x + x * x + z * z) * denom_f;
 		const float dL_dz = -2.f * w * z * (w + x + y) * denom_f;
 		dL_dc_xx = dL_dx;
 		dL_dc_yy = dL_dy;
 		dL_dc_xy = dL_dz;
 	}
-
+#endif
 
 	float denom = c_xx * c_yy - c_xy * c_xy;
 	float denom2inv = 1.0f / ((denom * denom) + 0.0000001f);
