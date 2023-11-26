@@ -9,6 +9,8 @@
  * For inquiries contact  george.drettakis@inria.fr
  */
 
+// clang-format off
+
 #include "backward.h"
 #include "auxiliary.h"
 #include <cooperative_groups.h>
@@ -203,7 +205,7 @@ __global__ void computeCov2DCUDA(int P,
 	float c_yy = cov2D[1][1];
 
 	constexpr float h_var = 0.3f;
-#ifdef DGR_FIX_AA
+#if defined(DGR_FIX_AA) && !defined(DGR_VIEW_DEPENDENT_DENSITY)
 	const float det_cov = c_xx * c_yy - c_xy * c_xy;
 	c_xx += h_var;
 	c_yy += h_var;
@@ -213,6 +215,21 @@ __global__ void computeCov2DCUDA(int P,
 	const float d_h_convolution_scaling = dL_dopacity_v * opacities[idx];
 	dL_dopacity[idx] = dL_dopacity_v * h_convolution_scaling;
 	const float d_inside_root = (det_cov / det_cov_plus_h_cov) <= 0.000025f ? 0.f : d_h_convolution_scaling / (2 * h_convolution_scaling);
+#elif defined(DGR_VIEW_DEPENDENT_DENSITY)
+    const auto l_prime = sqrt(t.x * t.x + t.y * t.y + t.z*t.z);
+    const float detJ = determinant(glm::mat3(
+        glm::mat3::col_type(                              1 / t.z,                                  0.0f,                      t.x / l_prime),
+        glm::mat3::col_type(                                 0.0f,                               1 / t.z,                      t.y / l_prime),
+        glm::mat3::col_type(                 -(t.x) / (t.z * t.z),                  -(t.y) / (t.z * t.z),                      t.z / l_prime))) * h_x * h_y;
+	c_xx += h_var;
+	c_yy += h_var;
+	const float det_cov_plus_h_cov = c_xx * c_yy - c_xy * c_xy;
+    const auto cov2_norm = 1 / (2 * 3.1415926535f * sqrt(det_cov_plus_h_cov));
+    const float dL_dopacity_v = dL_dopacity[idx];
+	dL_dopacity[idx] = dL_dopacity_v * detJ * cov2_norm;
+
+    const auto dL_ddetJ = dL_dopacity_v * opacities[idx] * cov2_norm;
+    const auto dL_dcov2_norm = dL_dopacity_v * opacities[idx] * detJ;
 #else
 	c_xx += h_var;
 	c_yy += h_var;
@@ -221,13 +238,16 @@ __global__ void computeCov2DCUDA(int P,
 	float dL_dc_xx = 0;
 	float dL_dc_xy = 0;
 	float dL_dc_yy = 0;
-#ifdef DGR_FIX_AA
+    float dL_dt_x_over_detJ = 0;
+    float dL_dt_y_over_detJ = 0;
+    float dL_dt_z_over_detJ = 0;
+#if defined(DGR_FIX_AA) && !defined(DGR_VIEW_DEPENDENT_DENSITY)
 	{
 		// https://www.wolframalpha.com/input?i=d+%28%28x*y+-+z%5E2%29%2F%28%28x%2Bw%29*%28y%2Bw%29+-+z%5E2%29%29+%2Fdx
 		// https://www.wolframalpha.com/input?i=d+%28%28x*y+-+z%5E2%29%2F%28%28x%2Bw%29*%28y%2Bw%29+-+z%5E2%29%29+%2Fdz
-		const float x = c_xx;
-		const float y = c_yy;
-		const float z = c_xy;
+		const float x = cov2D[0][0];
+		const float y = cov2D[1][1];
+		const float z = cov2D[0][1];
 		const float w = h_var;
 		const float denom_f = d_inside_root / sq(w * w + w * (x + y) + x * y - z * z);
 		const float dL_dx = w * (w * y + y * y + z * z) * denom_f;
@@ -237,6 +257,42 @@ __global__ void computeCov2DCUDA(int P,
 		dL_dc_yy = dL_dy;
 		dL_dc_xy = dL_dz;
 	}
+#elif defined(DGR_VIEW_DEPENDENT_DENSITY)
+    // https://www.wolframalpha.com/input?i=d+%281+%2F+%282%CF%80+sqrt%28%28x%2Bw%29*%28y%2Bw%29+-+z%5E2%29%29%29+%2Fdx
+    // https://www.wolframalpha.com/input?i=d+%281+%2F+%282%CF%80+sqrt%28%28x%2Bw%29*%28y%2Bw%29+-+z%5E2%29%29%29+%2Fdz
+    {
+        const float x = cov2D[0][0];
+        const float y = cov2D[1][1];
+        const float z = cov2D[0][1];
+        const float w = h_var;
+        const float inside_root = (w + x)*(w + y) - z * z;
+        const float pi_root = 3.1415926535f * sqrt(inside_root * inside_root * inside_root);
+        const float dL_dx = - dL_dcov2_norm * (w + y) / (4 * pi_root);
+        const float dL_dy = - dL_dcov2_norm * (w + x) / (4 * pi_root);
+        const float dL_dz = dL_dcov2_norm * z / (2 * pi_root);
+        dL_dc_xx = dL_dx;
+        dL_dc_yy = dL_dy;
+        dL_dc_xy = dL_dz;
+    }
+    // https://www.wolframcloud.com/obj/adamcelarek/Published/ewa_splatting_deriv.nb
+    {
+        const auto l_prime3 = l_prime * l_prime * l_prime;
+        const auto tx = t.x;
+        const auto ty = t.y;
+        const auto tz = t.z;
+        const auto tx2 = t.x * t.x;
+        const auto ty2 = t.y * t.y;
+        const auto tz2 = t.z * t.z;
+        const auto tx3 = t.x * t.x * t.x;
+        const auto ty3 = t.y * t.y * t.y;
+        const auto tz3 = t.z * t.z * t.z;
+        const auto inv_tz3_lprime3 = 1 / (tz3 * l_prime3);
+        const auto hxhy = h_x * h_y;
+        dL_dt_x_over_detJ = dL_ddetJ * hxhy * (-tx3 * inv_tz3_lprime3 - tx * ty2 * inv_tz3_lprime3 - tx / (tz * l_prime3) + 2 * tx / (tz3 * l_prime));
+        dL_dt_y_over_detJ = dL_ddetJ * hxhy * (-tx2 * ty * inv_tz3_lprime3 - ty3 * inv_tz3_lprime3 - ty / (tz * l_prime3) + 2 * ty / (tz3 * l_prime));
+        dL_dt_z_over_detJ = dL_ddetJ * hxhy * (-1 / l_prime3 - tx2 / (tz2 * l_prime3) - ty2 / (tz2 * l_prime3) -
+                                    3 * tx2 / (tz3 * tz * l_prime) - 3 * ty2 / (tz3 * tz * l_prime) - 1 / (tz2 * l_prime));
+    }
 #endif
 
 	float denom = c_xx * c_yy - c_xy * c_xy;
@@ -302,6 +358,12 @@ __global__ void computeCov2DCUDA(int P,
 	float dL_dtx = x_grad_mul * -h_x * tz2 * dL_dJ02;
 	float dL_dty = y_grad_mul * -h_y * tz2 * dL_dJ12;
 	float dL_dtz = -h_x * tz2 * dL_dJ00 - h_y * tz2 * dL_dJ11 + (2 * h_x * t.x) * tz3 * dL_dJ02 + (2 * h_y * t.y) * tz3 * dL_dJ12;
+    
+#if defined(DGR_VIEW_DEPENDENT_DENSITY)
+    dL_dtx += dL_dt_x_over_detJ;
+    dL_dty += dL_dt_y_over_detJ;
+    dL_dtz += dL_dt_z_over_detJ;
+#endif
 
 	// Account for transformation of mean to t
 	// t = transformPoint4x3(mean, view_matrix);

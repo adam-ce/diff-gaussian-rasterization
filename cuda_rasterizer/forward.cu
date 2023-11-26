@@ -9,6 +9,8 @@
  * For inquiries contact  george.drettakis@inria.fr
  */
 
+// clang-format off
+
 #include "forward.h"
 #include "auxiliary.h"
 #include <cooperative_groups.h>
@@ -71,7 +73,7 @@ __device__ glm::vec3 computeColorFromSH(int idx, int deg, int max_coeffs, const 
 }
 
 // Forward version of 2D covariance matrix computation
-__device__ float3 computeCov2D(const float3& mean, float focal_x, float focal_y, float tan_fovx, float tan_fovy, const float* cov3D, const float* viewmatrix)
+__device__ float3 computeCov2D(const float3& mean, float focal_x, float focal_y, float tan_fovx, float tan_fovy, const float* cov3D, const float* viewmatrix, float& weight_factor)
 {
 	// The following models the steps outlined by equations 29
 	// and 31 in "EWA Splatting" (Zwicker et al., 2002). 
@@ -90,6 +92,13 @@ __device__ float3 computeCov2D(const float3& mean, float focal_x, float focal_y,
 		focal_x / t.z, 0.0f, -(focal_x * t.x) / (t.z * t.z),
 		0.0f, focal_y / t.z, -(focal_y * t.y) / (t.z * t.z),
 		0, 0, 0);
+    const auto l_prime = sqrt(t.x * t.x + t.y * t.y + t.z*t.z);
+#ifdef DGR_VIEW_DEPENDENT_DENSITY
+    weight_factor = determinant(glm::mat3(
+        glm::mat3::col_type(                              1 / t.z,                                  0.0f,                      t.x / l_prime),
+        glm::mat3::col_type(                                 0.0f,                               1 / t.z,                      t.y / l_prime),
+        glm::mat3::col_type(                 -(t.x) / (t.z * t.z),                  -(t.y) / (t.z * t.z),                      t.z / l_prime))) * focal_x * focal_y;
+#endif
 
 	glm::mat3 W = glm::mat3(
 		viewmatrix[0], viewmatrix[4], viewmatrix[8],
@@ -215,18 +224,27 @@ __global__ void preprocessCUDA(int P, int D, int M,
 		cov3D = cov3Ds + idx * 6;
 	}
 
+    float weight_scaling = 1.f;
+
 	// Compute 2D screen-space covariance matrix
-	float3 cov = computeCov2D(p_orig, focal_x, focal_y, tan_fovx, tan_fovy, cov3D, viewmatrix);  // packed c_xx, c_xy, c_yy
+    float transformation_scaling;
+	float3 cov = computeCov2D(p_orig, focal_x, focal_y, tan_fovx, tan_fovy, cov3D, viewmatrix, transformation_scaling);  // packed c_xx, c_xy, c_yy
+#ifdef DGR_VIEW_DEPENDENT_DENSITY
+    weight_scaling *= transformation_scaling;
+#endif
 
 	// Apply low-pass filter: convolve with a gaussian with variance 0.3, i.e. every Gaussian should be at least
 	// one pixel wide/high.
-	constexpr float h_var = 0.3f;
 	const float det_cov = cov.x * cov.z - cov.y * cov.y;
+	constexpr float h_var = 0.3f;
 	cov.x += h_var;
 	cov.z += h_var;
 	const float det_cov_plus_h_cov = cov.x * cov.z - cov.y * cov.y;
-#ifdef DGR_FIX_AA
-	const float h_convolution_scaling = sqrt(max(0.000025f, det_cov / det_cov_plus_h_cov)); // max for numerical stability
+#if defined(DGR_FIX_AA) && !defined(DGR_VIEW_DEPENDENT_DENSITY)
+	weight_scaling *= sqrt(max(0.000025f, det_cov / det_cov_plus_h_cov)); // max for numerical stability
+#endif
+#ifdef DGR_VIEW_DEPENDENT_DENSITY
+    weight_scaling *= 1 / (2 * 3.1415926535f * sqrt(det_cov_plus_h_cov));
 #endif
 
 	// Invert covariance (EWA algorithm)
@@ -283,8 +301,8 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	radii[idx] = my_radius;
 	points_xy_image[idx] = point_image;
 	// Inverse 2D covariance and opacity neatly pack into one float4
-#ifdef DGR_FIX_AA
-	conic_opacity[idx] = { conic.x, conic.y, conic.z, opacities[idx] * h_convolution_scaling };
+#if defined(DGR_FIX_AA) || defined(DGR_VIEW_DEPENDENT_DENSITY)
+	conic_opacity[idx] = { conic.x, conic.y, conic.z, opacities[idx] * weight_scaling };
 #else
 	conic_opacity[idx] = { conic.x, conic.y, conic.z, opacities[idx] };
 #endif
