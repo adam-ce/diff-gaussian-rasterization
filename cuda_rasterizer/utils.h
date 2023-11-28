@@ -1,0 +1,200 @@
+/****************************************************************************
+*  Copyright (C) 2023 Adam Celarek (github.com/adam-ce, github.com/cg-tuwien)
+* 
+*  Permission is hereby granted, free of charge, to any person obtaining a copy
+*  of this software and associated documentation files (the "Software"), to deal
+*  in the Software without restriction, including without limitation the rights to
+*  use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+*  of the Software, and to permit persons to whom the Software is furnished to do so,
+*  subject to the following conditions:
+* 
+*  The above copyright notice and this permission notice shall be included in
+*  all copies or substantial portions of the Software.
+* 
+*  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+*  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+*  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+*  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+*  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+*  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+*  THE SOFTWARE.
+****************************************************************************/
+
+#pragma once
+
+#include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
+#include <glm/gtx/quaternion.hpp>
+#include <stroke/cuda_compat.h>
+#include <stroke/gaussian.h>
+#include <stroke/geometry.h>
+#include <stroke/linalg.h>
+#include <stroke/utility.h>
+#include <stroke/welford.h>
+
+namespace dgmr::utils {
+
+template <typename scalar_t>
+struct Gaussian2d {
+    scalar_t weight;
+    glm::vec<2, scalar_t> centroid;
+    stroke::Cov2<scalar_t> cov;
+};
+
+template <typename scalar_t>
+struct Camera {
+    using mat_t = glm::mat<4, 4, scalar_t>;
+    mat_t view_matrix = {};
+    mat_t view_projection_matrix = {};
+    scalar_t focal_x = 0;
+    scalar_t focal_y = 0;
+    scalar_t tan_fovx = 0;
+    scalar_t tan_fovy = 0;
+    unsigned fb_width = 0;
+    unsigned fb_height = 0;
+};
+
+template <typename scalar_t>
+STROKE_DEVICES_INLINE stroke::Cov2<scalar_t> affine_transform_and_cut(const stroke::Cov3<scalar_t>& S, const glm::mat<3, 3, scalar_t>& M)
+{
+    return {
+        M[0][0] * (S[0] * M[0][0] + S[1] * M[1][0] + S[2] * M[2][0]) + M[1][0] * (S[1] * M[0][0] + S[3] * M[1][0] + S[4] * M[2][0]) + M[2][0] * (S[2] * M[0][0] + S[4] * M[1][0] + S[5] * M[2][0]),
+        M[0][0] * (S[0] * M[0][1] + S[1] * M[1][1] + S[2] * M[2][1]) + M[1][0] * (S[1] * M[0][1] + S[3] * M[1][1] + S[4] * M[2][1]) + M[2][0] * (S[2] * M[0][1] + S[4] * M[1][1] + S[5] * M[2][1]),
+        M[0][1] * (S[0] * M[0][1] + S[1] * M[1][1] + S[2] * M[2][1]) + M[1][1] * (S[1] * M[0][1] + S[3] * M[1][1] + S[4] * M[2][1]) + M[2][1] * (S[2] * M[0][1] + S[4] * M[1][1] + S[5] * M[2][1])
+    };
+}
+
+template <typename scalar_t>
+STROKE_DEVICES_INLINE glm::vec<3, scalar_t> project(const glm::vec<3, scalar_t>& point, const glm::mat<4, 4, scalar_t>& projection_matrix)
+{
+    auto pp = projection_matrix * glm::vec<4, scalar_t>(point, 1);
+    pp /= pp.w + scalar_t(0.0000001);
+    return glm::vec<3, scalar_t>(pp);
+}
+
+template <typename scalar_t>
+STROKE_DEVICES_INLINE glm::vec<2, scalar_t> ndc2screen(const glm::vec<3, scalar_t>& point, unsigned width, unsigned height)
+{
+    const auto ndc2Pix = [](scalar_t v, int S) {
+        return ((v + scalar_t(1.0)) * S - scalar_t(1.0)) * scalar_t(0.5);
+    };
+    return { ndc2Pix(point.x, width), ndc2Pix(point.y, height) };
+}
+
+template <typename scalar_t>
+STROKE_DEVICES_INLINE glm::mat<3, 3, scalar_t> make_jakobian(const glm::vec<3, scalar_t>& t, scalar_t l_prime, scalar_t focal_x = 1, scalar_t focal_y = 1)
+{
+    using mat3_t = glm::mat<3, 3, scalar_t>;
+    using mat3_col_t = typename mat3_t::col_type;
+    // clang-format off
+    return mat3_t(
+               mat3_col_t(                 focal_x / t.z,                                0,   (focal_x * t.x) / l_prime),
+               mat3_col_t(                             0,                    focal_y / t.z,   (focal_y * t.y) / l_prime),
+               mat3_col_t(-(focal_x * t.x) / (t.z * t.z),   -(focal_y * t.y) / (t.z * t.z),               t.z / l_prime));
+    // clang-format on
+}
+
+template <typename scalar_t>
+STROKE_DEVICES_INLINE Gaussian2d<scalar_t> splat(scalar_t weight, const glm::vec<3, scalar_t>& centroid, const stroke::Cov3<scalar_t>& cov3D, const Camera<scalar_t>& camera)
+{
+    using vec3_t = glm::vec<3, scalar_t>;
+    using vec4_t = glm::vec<4, scalar_t>;
+    using mat3_t = glm::mat<3, 3, scalar_t>;
+    const auto clamp_to_fov = [&](const vec3_t& t) {
+        const auto lim_x = scalar_t(1.3) * camera.tan_fovx * t.z;
+        const auto lim_y = scalar_t(1.3) * camera.tan_fovy * t.z;
+        return vec3_t { stroke::clamp(t.x, -lim_x, lim_x), stroke::clamp(t.y, -lim_y, lim_y), t.z };
+    };
+
+    const auto t = clamp_to_fov(vec3_t(camera.view_matrix * vec4_t(centroid, 1.f))); // clamps the size of the jakobian
+
+    // following zwicker et al. "EWA Splatting"
+
+    const auto l_prime = glm::length(t);
+    // clang-format off
+    const auto J = make_jakobian(t, l_prime);
+//    const auto S = mat3_t(
+//        mat3_col_t(                       camera.focal_x,                                     0,                                  0),
+//        mat3_col_t(                                    0,                        camera.focal_y,                                  0),
+//        mat3_col_t(                                    0,                                     0,                                  1));
+    // Avoid matrix multiplication S * J:
+    const auto SJ = make_jakobian(t, l_prime, camera.focal_x, camera.focal_y);
+    // clang-format on
+
+    const mat3_t W = mat3_t(camera.view_matrix);
+    mat3_t T = SJ * W;
+
+    const auto projected_centroid = project(centroid, camera.view_projection_matrix);
+    dgmr::utils::Gaussian2d<scalar_t> screen_space_gaussian;
+    screen_space_gaussian.weight = weight * camera.focal_x * camera.focal_y * det(J); // det(S) == camera.focal_x * camera.focal_y
+    screen_space_gaussian.centroid = ndc2screen(projected_centroid, camera.fb_width, camera.fb_height);
+    screen_space_gaussian.cov = affine_transform_and_cut(cov3D, T);
+
+    return screen_space_gaussian;
+}
+
+STROKE_DEVICES_INLINE stroke::Cov3<float> compute_cov(const glm::vec3& scale, const glm::quat& rot)
+{
+    const auto RS = glm::toMat3(rot) * glm::mat3(scale.x, 0, 0, 0, scale.y, 0, 0, 0, scale.z);
+    return stroke::Cov3<float>(RS * transpose(RS));
+}
+
+template <typename scalar_t>
+STROKE_DEVICES_INLINE glm::mat<3, 3, scalar_t> rotation_matrix_from(const glm::vec<3, scalar_t>& direction)
+{
+    using Vec = glm::vec<3, scalar_t>;
+    using Mat = glm::mat<3, 3, scalar_t>;
+    assert(stroke::abs(glm::length(direction) - 1) < 0.0001f);
+    const auto dot_z_abs = stroke::abs(dot(direction, Vec(0, 0, 1)));
+    const auto dot_x_abs = stroke::abs(dot(direction, Vec(1, 0, 0)));
+
+    const auto other_1 = glm::normalize(glm::cross(direction, dot_z_abs < dot_x_abs ? Vec(0, 0, 1) : Vec(1, 0, 0)));
+    const auto other_2 = glm::normalize(glm::cross(other_1, direction));
+
+    return Mat(other_1, other_2, direction);
+}
+
+template <typename scalar_t>
+struct DirectionAndKernelScales {
+    const glm::vec<3, scalar_t>& direction;
+    const glm::vec<3, scalar_t>& kernel_scales;
+};
+
+template <typename scalar_t>
+STROKE_DEVICES_INLINE stroke::Cov3<scalar_t> orient_filter_kernel(const DirectionAndKernelScales<scalar_t>& p)
+{
+    using Vec = glm::vec<3, scalar_t>;
+    using Mat = glm::mat<3, 3, scalar_t>;
+    const auto RS = rotation_matrix_from(Vec(p.direction)) * Mat(p.kernel_scales.x, 0, 0, 0, p.kernel_scales.y, 0, 0, 0, p.kernel_scales.z);
+    return stroke::Cov3<scalar_t>(RS * transpose(RS));
+}
+
+template <glm::length_t n_dims, typename scalar_t>
+struct FilteredCovAndWeight {
+    stroke::Cov<n_dims, scalar_t> cov;
+    float weight_factor;
+};
+
+// kernel cov comes from a normalised gaussian, i.e., it integrates to 1 and has no explicit weight
+template <glm::length_t n_dims, typename scalar_t>
+STROKE_DEVICES_INLINE FilteredCovAndWeight<n_dims, scalar_t> convolve_unnormalised_with_normalised(const stroke::Cov<n_dims, scalar_t>& cov, const stroke::Cov<n_dims, scalar_t>& kernel_cov)
+{
+    const auto new_cov = cov + kernel_cov;
+    return { stroke::Cov<n_dims, scalar_t>(new_cov), float(stroke::sqrt(stroke::max(scalar_t(0.000025), scalar_t(det(cov) / det(new_cov))))) };
+}
+
+STROKE_DEVICES_INLINE stroke::geometry::Aabb1f gaussian_to_point_distance_bounds(
+    const glm::vec3& gauss_centr,
+    const glm::vec3& gauss_size,
+    const glm::quat& gauss_rotation,
+    const float gauss_iso_ellipsoid,
+    const glm::vec3& query_point)
+{
+
+    const auto transformed_query_point = glm::toMat3(gauss_rotation) * (query_point - gauss_centr);
+    const auto s = gauss_size * (0.5f * gauss_iso_ellipsoid);
+    const auto transformed_bb = stroke::geometry::Aabb3f { -s, s };
+
+    return { stroke::geometry::distance(transformed_bb, transformed_query_point), stroke::geometry::largest_distance_to(transformed_bb, transformed_query_point) };
+}
+} // namespace dgmr::utils

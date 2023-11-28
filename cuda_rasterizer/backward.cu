@@ -11,6 +11,7 @@
 
 // clang-format off
 
+#include "grad/utils.h"
 #include "backward.h"
 #include "auxiliary.h"
 #include <cooperative_groups.h>
@@ -167,8 +168,14 @@ __global__ void computeCov2DCUDA(int P,
 
 	// Fetch gradients, recompute 2D covariance and relevant 
 	// intermediate forward results needed in the backward.
-	float3 mean = means[idx];
+    float3 mean = means[idx];
+	glm::vec3 glm_mean = {mean.x, mean.y, mean.z};
+    const auto grad_conic = stroke::Cov2_f(dL_dconics[4 * idx], dL_dconics[4 * idx + 1], dL_dconics[4 * idx + 3]);
+
 	float3 dL_dconic = { dL_dconics[4 * idx], dL_dconics[4 * idx + 1], dL_dconics[4 * idx + 3] };
+
+
+
 	float3 t = transformPoint4x3(mean, view_matrix);
 	
 	const float limx = 1.3f * tan_fovx;
