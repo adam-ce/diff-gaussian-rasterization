@@ -9,6 +9,8 @@
  * For inquiries contact  george.drettakis@inria.fr
  */
 
+// clang-format off
+
 #ifndef CUDA_RASTERIZER_BACKWARD_H_INCLUDED
 #define CUDA_RASTERIZER_BACKWARD_H_INCLUDED
 
@@ -61,7 +63,9 @@ namespace BACKWARD
 		float* dL_dcov3D,
 		float* dL_dsh,
 		glm::vec3* dL_dscale,
-		glm::vec4* dL_drot);
+		glm::vec4* dL_drot,
+        int fb_width, int fb_height);
 }
 
 #endif
+// clang-format on

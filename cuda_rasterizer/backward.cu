@@ -157,7 +157,8 @@ __global__ void computeCov2DCUDA(int P,
 	const float* dL_dconics,
 	float* dL_dopacity,
 	float3* dL_dmeans,
-	float* dL_dcov)
+	float* dL_dcov,
+	int fb_width, int fb_height)
 {
 	auto idx = cg::this_grid().thread_rank();
 	if (idx >= P || !(radii[idx] > 0))
@@ -169,8 +170,30 @@ __global__ void computeCov2DCUDA(int P,
 	// Fetch gradients, recompute 2D covariance and relevant 
 	// intermediate forward results needed in the backward.
     float3 mean = means[idx];
-	glm::vec3 glm_mean = {mean.x, mean.y, mean.z};
-    const auto grad_conic = stroke::Cov2_f(dL_dconics[4 * idx], dL_dconics[4 * idx + 1], dL_dconics[4 * idx + 3]);
+    // {
+    //     float weight = opacities[idx];
+    //     glm::vec3 position = {mean.x, mean.y, mean.z};
+    //     stroke::Cov3_f cov3d = {
+    //         cov3D[0], cov3D[1], cov3D[2],
+    //         cov3D[3], cov3D[4],
+    //         cov3D[5]
+    //     };
+    //     #if defined(DGR_VIEW_DEPENDENT_DENSITY)
+    //     constexpr bool orientation_dependent_density = true;
+    //     #else
+    //     constexpr bool orientation_dependent_density = false;
+    //     #endif
+    //     dgmr::utils::Camera<float> cam;
+    //     cam.focal_x = h_x;
+    //     cam.focal_y = h_y;
+    //     cam.fb_height = 2;
+    //     cam.fb_width = 2;
+    //     // cam.fb_height = 
+    //     const auto g2d_and_cache = dgmr::utils::splat_with_cache<orientation_dependent_density>(weight, position, cov3d, cam, 0.3f);
+    
+    //     const auto grad_conic = stroke::Cov2_f(dL_dconics[4 * idx], dL_dconics[4 * idx + 1], dL_dconics[4 * idx + 3]);
+    //     // const auto grad_cov2 = stroke::grad::inverse()
+    // }
 
 	float3 dL_dconic = { dL_dconics[4 * idx], dL_dconics[4 * idx + 1], dL_dconics[4 * idx + 3] };
 
@@ -470,7 +493,8 @@ __global__ void preprocessCUDA(
 	float* dL_dcov3D,
 	float* dL_dsh,
 	glm::vec3* dL_dscale,
-	glm::vec4* dL_drot)
+	glm::vec4* dL_drot,
+	int fb_width, int fb_height)
 {
 	auto idx = cg::this_grid().thread_rank();
 	if (idx >= P || !(radii[idx] > 0))
@@ -484,12 +508,15 @@ __global__ void preprocessCUDA(
 
 	// Compute loss gradient w.r.t. 3D means due to gradients of 2D means
 	// from rendering procedure
+
+	const float dL_dmean2Dx = dL_dmean2D[idx].x * 0.5f * fb_width;
+	const float dL_dmean2Dy = dL_dmean2D[idx].y * 0.5f * fb_height;
 	glm::vec3 dL_dmean;
 	float mul1 = (proj[0] * m.x + proj[4] * m.y + proj[8] * m.z + proj[12]) * m_w * m_w;
 	float mul2 = (proj[1] * m.x + proj[5] * m.y + proj[9] * m.z + proj[13]) * m_w * m_w;
-	dL_dmean.x = (proj[0] * m_w - proj[3] * mul1) * dL_dmean2D[idx].x + (proj[1] * m_w - proj[3] * mul2) * dL_dmean2D[idx].y;
-	dL_dmean.y = (proj[4] * m_w - proj[7] * mul1) * dL_dmean2D[idx].x + (proj[5] * m_w - proj[7] * mul2) * dL_dmean2D[idx].y;
-	dL_dmean.z = (proj[8] * m_w - proj[11] * mul1) * dL_dmean2D[idx].x + (proj[9] * m_w - proj[11] * mul2) * dL_dmean2D[idx].y;
+	dL_dmean.x = (proj[0] * m_w - proj[3] * mul1) * dL_dmean2Dx  + (proj[1] * m_w - proj[3] * mul2) * dL_dmean2Dy;
+	dL_dmean.y = (proj[4] * m_w - proj[7] * mul1) * dL_dmean2Dx + (proj[5] * m_w - proj[7] * mul2) * dL_dmean2Dy;
+	dL_dmean.z = (proj[8] * m_w - proj[11] * mul1) * dL_dmean2Dx + (proj[9] * m_w - proj[11] * mul2) * dL_dmean2Dy;
 
 	// That's the second part of the mean gradient. Previous computation
 	// of cov2D and following SH conversion also affects it.
@@ -566,8 +593,6 @@ renderCUDA(
 
 	// Gradient of pixel coordinate w.r.t. normalized 
 	// screen-space viewport corrdinates (-1 to 1)
-	const float ddelx_dx = 0.5 * W;
-	const float ddely_dy = 0.5 * H;
 
 	// Traverse all Gaussians
 	for (int i = 0; i < rounds; i++, toDo -= BLOCK_SIZE)
@@ -651,8 +676,8 @@ renderCUDA(
 			const float dG_ddely = -gdy * con_o.z - gdx * con_o.y;
 
 			// Update gradients w.r.t. 2D mean position of the Gaussian
-			atomicAdd(&dL_dmean2D[global_id].x, dL_dG * dG_ddelx * ddelx_dx);
-			atomicAdd(&dL_dmean2D[global_id].y, dL_dG * dG_ddely * ddely_dy);
+			atomicAdd(&dL_dmean2D[global_id].x, dL_dG * dG_ddelx);
+			atomicAdd(&dL_dmean2D[global_id].y, dL_dG * dG_ddely);
 
 			// Update gradients w.r.t. 2D covariance (2x2 matrix, symmetric)
 			atomicAdd(&dL_dconic2D[global_id].x, -0.5f * gdx * d.x * dL_dG);
@@ -689,7 +714,8 @@ void BACKWARD::preprocess(
 	float* dL_dcov3D,
 	float* dL_dsh,
 	glm::vec3* dL_dscale,
-	glm::vec4* dL_drot)
+	glm::vec4* dL_drot,
+    int fb_width, int fb_height)
 {
 	// Propagate gradients for the path of 2D conic matrix computation. 
 	// Somewhat long, thus it is its own kernel rather than being part of 
@@ -709,7 +735,8 @@ void BACKWARD::preprocess(
 		dL_dconic,
 		dL_dopacity,
 		(float3*)dL_dmean3D,
-		dL_dcov3D);
+		dL_dcov3D,
+        fb_width, fb_height);
 
 	// Propagate gradients for remaining steps: finish 3D mean gradients,
 	// propagate color gradients to SH (if desireD), propagate 3D covariance
@@ -731,7 +758,8 @@ void BACKWARD::preprocess(
 		dL_dcov3D,
 		dL_dsh,
 		dL_dscale,
-		dL_drot);
+		dL_drot,
+        fb_width, fb_height);
 }
 
 void BACKWARD::render(

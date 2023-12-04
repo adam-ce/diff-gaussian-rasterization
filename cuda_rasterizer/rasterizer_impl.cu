@@ -9,6 +9,8 @@
  * For inquiries contact  george.drettakis@inria.fr
  */
 
+// clang-format off
+
 #include "rasterizer_impl.h"
 #include <iostream>
 #include <fstream>
@@ -455,5 +457,7 @@ void CudaRasterizer::Rasterizer::backward(
 		dL_dcov3D,
 		dL_dsh,
 		(glm::vec3*)dL_dscale,
-		(glm::vec4*)dL_drot), debug)
+		(glm::vec4*)dL_drot,
+        width, height), debug)
 }
+// clang-format on
