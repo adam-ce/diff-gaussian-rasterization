@@ -453,6 +453,8 @@ renderCUDA(
 			for (int i = 0; i < C; i++)
 				bg_dot_dpixel += bg_color[i] * dL_dpixel[i];
 			dL_dalpha += (-T_final / (1.f - alpha)) * bg_dot_dpixel;
+            if (alpha >= 0.98999999f)
+                dL_dalpha = 0;
 
 
 			// Helpful reusable temporary variables
