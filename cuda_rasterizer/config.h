@@ -18,6 +18,6 @@
 
 // #define DGR_FIX_AA
 #define DGR_DIST_BASED_SORTING
-#define DGR_PHYSICAL_DENSITY
+// #define DGR_PHYSICAL_DENSITY     // undef for 3dgs density (gaussians have the same projected opacity / density no matter the orientation and shape)
 
 #endif
