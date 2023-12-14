@@ -18,6 +18,6 @@
 
 // #define DGR_FIX_AA
 #define DGR_DIST_BASED_SORTING
-#define DGR_VIEW_DEPENDENT_DENSITY
+#define DGR_PHYSICAL_DENSITY
 
 #endif

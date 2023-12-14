@@ -174,10 +174,10 @@ __global__ void preprocessCUDA(int P, int D, int M,
         cov3d = reinterpret_cast<const stroke::Cov3_f *>(cov3Ds)[idx];
     }
 
-#if defined(DGR_VIEW_DEPENDENT_DENSITY)
-    constexpr bool orientation_dependent_density = true;
+#if defined(DGR_PHYSICAL_DENSITY)
+    constexpr bool use_physical_density = true;
 #else
-    constexpr bool orientation_dependent_density = false;
+    constexpr bool use_physical_density = false;
 #endif
 
     const float weight3d = opacities[idx];
@@ -192,8 +192,11 @@ __global__ void preprocessCUDA(int P, int D, int M,
     cam.view_matrix = *reinterpret_cast<const glm::mat4 *>(viewmatrix);
     cam.view_projection_matrix = *reinterpret_cast<const glm::mat4 *>(projmatrix);
 
-    const dgmr::utils::Gaussian2d<float> g2d
-        = dgmr::utils::splat<orientation_dependent_density>(weight3d, pos3d, cov3d, cam, 0.3f);
+    const dgmr::utils::Gaussian2d<float> g2d = dgmr::utils::splat<use_physical_density>(weight3d,
+                                                                                        pos3d,
+                                                                                        cov3d,
+                                                                                        cam,
+                                                                                        0.3f);
     if (det(g2d.cov) == 0.0f)
         return;
 
