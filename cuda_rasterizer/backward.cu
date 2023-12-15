@@ -9,8 +9,8 @@
  * For inquiries contact  george.drettakis@inria.fr
  */
 
-#include "backward.h"
 #include "auxiliary.h"
+#include "backward.h"
 #include "dgmr/grad/math.h"
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
@@ -242,13 +242,18 @@ __global__ void preprocessCUDA(
     auto idx = cg::this_grid().thread_rank();
     if (idx >= P || !(radii[idx] > 0))
         return;
+    const auto scales3d = scales[idx];
 
 #if defined(DGR_PHYSICAL_DENSITY)
     constexpr bool use_physical_density = true;
+    const auto integr_of_exp = dgmr::math::integrate_exponential(scales3d);
+    const auto opacity = opacities[idx];
+    const auto weight3d = opacity * integr_of_exp;
 #else
     constexpr bool use_physical_density = false;
+    const auto weight3d = opacities[idx];
 #endif
-    const float weight3d = opacities[idx];
+
     const glm::vec3 pos3d = means[idx];
     const stroke::Cov3_f cov3d = cov3Ds[idx];
     dgmr::math::Camera<float> cam;
@@ -284,7 +289,7 @@ __global__ void preprocessCUDA(
                                                                     g2d_and_cache,
                                                                     cam,
                                                                     0.3f);
-    dL_dopacity[idx] = grad_weight3d;
+
     dL_dmeans[idx] = grad_pos3d;
 
     // Compute gradient updates due to computing colors from SHs
@@ -312,6 +317,17 @@ __global__ void preprocessCUDA(
     } else {
         dL_dcov3D[idx] = grad_cov3d;
     }
+
+#if defined(DGR_PHYSICAL_DENSITY)
+    // const auto integr_of_exp = dgmr::math::integrate_exponential(scales3d);
+    // const auto weight3d = opacities[idx] * integr_of_exp;
+    dL_dopacity[idx] = grad_weight3d * integr_of_exp;
+    const auto grad_integr_of_exp = grad_weight3d * opacity;
+    const auto grad_scales3d = dgmr::math::grad::integrate_exponential(scales3d, grad_integr_of_exp);
+    dL_dscale[idx] += grad_scales3d; // must go after computeCov3D
+#else
+    dL_dopacity[idx] = grad_weight3d;
+#endif
 }
 
 // Backward version of the rendering procedure.

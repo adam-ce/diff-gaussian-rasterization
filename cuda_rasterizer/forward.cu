@@ -168,10 +168,11 @@ __global__ void preprocessCUDA(int P, int D, int M,
     // If 3D covariance matrix is precomputed, use it, otherwise compute
     // from scaling and rotation parameters.
     stroke::Cov3_f cov3d;
+    const auto scales3d = scales[idx];
     if (cov3D_precomp != nullptr) {
         cov3d = reinterpret_cast<const stroke::Cov3_f *>(cov3D_precomp)[idx];
     } else {
-        computeCov3D(scales[idx], scale_modifier, rotations[idx], cov3Ds + idx * 6);
+        computeCov3D(scales3d, scale_modifier, rotations[idx], cov3Ds + idx * 6);
         cov3d = reinterpret_cast<const stroke::Cov3_f *>(cov3Ds)[idx];
     }
 
@@ -181,7 +182,9 @@ __global__ void preprocessCUDA(int P, int D, int M,
     constexpr bool use_physical_density = false;
 #endif
 
-    const float weight3d = opacities[idx];
+    const auto weight3d = use_physical_density
+                              ? opacities[idx] * dgmr::math::integrate_exponential(scales3d)
+                              : opacities[idx];
     const glm::vec3 pos3d = {p_orig.x, p_orig.y, p_orig.z};
     dgmr::math::Camera<float> cam;
     cam.focal_x = focal_x;
