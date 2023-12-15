@@ -10,8 +10,9 @@
  */
 
 #include "auxiliary.h"
+#include "dgmr/grad/math.h"
+#include "dgmr/math.h"
 #include "forward.h"
-#include "utils.h"
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 #include <stroke/linalg.h>
@@ -182,7 +183,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 
     const float weight3d = opacities[idx];
     const glm::vec3 pos3d = {p_orig.x, p_orig.y, p_orig.z};
-    dgmr::utils::Camera<float> cam;
+    dgmr::math::Camera<float> cam;
     cam.focal_x = focal_x;
     cam.focal_y = focal_y;
     cam.fb_height = unsigned(H);
@@ -192,7 +193,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
     cam.view_matrix = *reinterpret_cast<const glm::mat4 *>(viewmatrix);
     cam.view_projection_matrix = *reinterpret_cast<const glm::mat4 *>(projmatrix);
 
-    const dgmr::utils::Gaussian2d<float> g2d = dgmr::utils::splat<use_physical_density>(weight3d,
+    const dgmr::math::Gaussian2d<float> g2d = dgmr::math::splat<use_physical_density>(weight3d,
                                                                                         pos3d,
                                                                                         cov3d,
                                                                                         cam,

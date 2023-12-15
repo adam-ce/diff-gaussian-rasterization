@@ -9,9 +9,9 @@
  * For inquiries contact  george.drettakis@inria.fr
  */
 
-#include "grad/utils.h"
 #include "backward.h"
 #include "auxiliary.h"
+#include "dgmr/grad/math.h"
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 namespace cg = cooperative_groups;
@@ -251,7 +251,7 @@ __global__ void preprocessCUDA(
     const float weight3d = opacities[idx];
     const glm::vec3 pos3d = means[idx];
     const stroke::Cov3_f cov3d = cov3Ds[idx];
-    dgmr::utils::Camera<float> cam;
+    dgmr::math::Camera<float> cam;
     cam.focal_x = focal_x;
     cam.focal_y = focal_y;
     cam.fb_height = unsigned(fb_height);
@@ -261,8 +261,8 @@ __global__ void preprocessCUDA(
     cam.view_matrix = *reinterpret_cast<const glm::mat4 *>(view_matrix);
     cam.view_projection_matrix = *reinterpret_cast<const glm::mat4 *>(proj);
 
-    const dgmr::utils::Gaussian2dAndValueCache<float> g2d_and_cache
-        = dgmr::utils::splat_with_cache<use_physical_density>(weight3d, pos3d, cov3d, cam, 0.3f);
+    const dgmr::math::Gaussian2dAndValueCache<float> g2d_and_cache
+        = dgmr::math::splat_with_cache<use_physical_density>(weight3d, pos3d, cov3d, cam, 0.3f);
     if (det(g2d_and_cache.gaussian.cov) == 0.0f)
         return;
 
@@ -275,7 +275,7 @@ __global__ void preprocessCUDA(
     const float grad_weight2d = dL_dopacity[idx];
     const glm::vec2 grad_pos2d = {dL_dmean2D[idx].x, dL_dmean2D[idx].y};
     const auto [grad_weight3d, grad_pos3d, grad_cov3d]
-        = dgmr::utils::grad::splat_with_cache<use_physical_density>(weight3d,
+        = dgmr::math::grad::splat_with_cache<use_physical_density>(weight3d,
                                                                     pos3d,
                                                                     cov3d,
                                                                     {grad_weight2d,
