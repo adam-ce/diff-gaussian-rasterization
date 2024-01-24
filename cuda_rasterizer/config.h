@@ -18,6 +18,13 @@
 
 // #define DGR_FIX_AA
 #define DGR_DIST_BASED_SORTING
-// #define DGR_PHYSICAL_DENSITY     // undef for 3dgs density (gaussians have the same projected opacity / density no matter the orientation and shape)
+
+// enum class Formulation : int {
+//     Opacity = 0, // original
+//     Mass = 1,
+//     Density = 2,
+//     Ots = 3 // Opacity thin side, view dependent, but scaled between 0 and 1
+// };
+#define DGR_FORMULATION 3
 
 #endif

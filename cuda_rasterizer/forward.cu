@@ -165,26 +165,13 @@ __global__ void preprocessCUDA(int P, int D, int M,
 		p_orig.x > boxmax.x || p_orig.y > boxmax.y || p_orig.z > boxmax.z)
 		return;
 
-    // If 3D covariance matrix is precomputed, use it, otherwise compute
-    // from scaling and rotation parameters.
-    stroke::Cov3_f cov3d;
-    const auto scales3d = scales[idx];
-    if (cov3D_precomp != nullptr) {
-        cov3d = reinterpret_cast<const stroke::Cov3_f *>(cov3D_precomp)[idx];
-    } else {
-        computeCov3D(scales3d, scale_modifier, rotations[idx], cov3Ds + idx * 6);
-        cov3d = reinterpret_cast<const stroke::Cov3_f *>(cov3Ds)[idx];
-    }
+    const auto weight3d = opacities[idx];
+    const auto scale3d = scales[idx];
+    const auto rotation3d = glm::quat(rotations[idx][0],
+                                      rotations[idx][1],
+                                      rotations[idx][2],
+                                      rotations[idx][3]);
 
-#if defined(DGR_PHYSICAL_DENSITY)
-    constexpr bool use_physical_density = true;
-#else
-    constexpr bool use_physical_density = false;
-#endif
-
-    const auto weight3d = use_physical_density
-                              ? opacities[idx] * dgmr::math::integrate_exponential(scales3d)
-                              : opacities[idx];
     const glm::vec3 pos3d = {p_orig.x, p_orig.y, p_orig.z};
     dgmr::math::Camera<float> cam;
     cam.focal_x = focal_x;
@@ -196,11 +183,8 @@ __global__ void preprocessCUDA(int P, int D, int M,
     cam.view_matrix = *reinterpret_cast<const glm::mat4 *>(viewmatrix);
     cam.view_projection_matrix = *reinterpret_cast<const glm::mat4 *>(projmatrix);
 
-    const dgmr::math::Gaussian2d<float> g2d = dgmr::math::splat<use_physical_density>(weight3d,
-                                                                                        pos3d,
-                                                                                        cov3d,
-                                                                                        cam,
-                                                                                        0.3f);
+    const dgmr::math::Gaussian2d<float> g2d = dgmr::math::splat<dgmr::Formulation(
+        DGR_FORMULATION)>(weight3d, pos3d, scale3d, rotation3d, cam, 0.3f);
     if (det(g2d.cov) == 0.0f)
         return;
 

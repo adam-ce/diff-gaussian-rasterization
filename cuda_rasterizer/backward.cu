@@ -238,24 +238,20 @@ __global__ void preprocessCUDA(
     glm::vec4 *dL_drot,
     int fb_width, int fb_height)
 {
+    constexpr auto formulation = dgmr::Formulation(DGR_FORMULATION);
     // clang-format on
     auto idx = cg::this_grid().thread_rank();
     if (idx >= P || !(radii[idx] > 0))
         return;
     const auto scales3d = scales[idx];
 
-#if defined(DGR_PHYSICAL_DENSITY)
-    constexpr bool use_physical_density = true;
-    const auto integr_of_exp = dgmr::math::integrate_exponential(scales3d);
-    const auto opacity = opacities[idx];
-    const auto weight3d = opacity * integr_of_exp;
-#else
-    constexpr bool use_physical_density = false;
     const auto weight3d = opacities[idx];
-#endif
-
     const glm::vec3 pos3d = means[idx];
-    const stroke::Cov3_f cov3d = cov3Ds[idx];
+    const auto scale3d = scales[idx];
+    const auto rotation3d = glm::quat(rotations[idx][0],
+                                      rotations[idx][1],
+                                      rotations[idx][2],
+                                      rotations[idx][3]);
     dgmr::math::Camera<float> cam;
     cam.focal_x = focal_x;
     cam.focal_y = focal_y;
@@ -266,31 +262,34 @@ __global__ void preprocessCUDA(
     cam.view_matrix = *reinterpret_cast<const glm::mat4 *>(view_matrix);
     cam.view_projection_matrix = *reinterpret_cast<const glm::mat4 *>(proj);
 
-    const dgmr::math::Gaussian2dAndValueCache<float> g2d_and_cache
-        = dgmr::math::splat_with_cache<use_physical_density>(weight3d, pos3d, cov3d, cam, 0.3f);
-    if (det(g2d_and_cache.gaussian.cov) == 0.0f)
+    const dgmr::math::Gaussian2d<float> g2d
+        = dgmr::math::splat<formulation>(weight3d, pos3d, scale3d, rotation3d, cam, 0.3f);
+    if (det(g2d.cov) == 0.0f)
         return;
 
-    const auto conic2d = inverse(g2d_and_cache.gaussian.cov);
+    const auto conic2d = inverse(g2d.cov);
     const auto grad_conic = stroke::Cov2_f{dL_dconics[4 * idx],
                                            dL_dconics[4 * idx + 1],
                                            dL_dconics[4 * idx + 3]};
-    const auto grad_cov2 = stroke::grad::inverse(g2d_and_cache.gaussian.cov, grad_conic);
+    const auto grad_cov2 = stroke::grad::inverse(g2d.cov, grad_conic);
 
     const float grad_weight2d = dL_dopacity[idx];
     const glm::vec2 grad_pos2d = {dL_dmean2D[idx].x, dL_dmean2D[idx].y};
-    const auto [grad_weight3d, grad_pos3d, grad_cov3d]
-        = dgmr::math::grad::splat_with_cache<use_physical_density>(weight3d,
-                                                                    pos3d,
-                                                                    cov3d,
-                                                                    {grad_weight2d,
-                                                                     grad_pos2d,
-                                                                     grad_cov2},
-                                                                    g2d_and_cache,
-                                                                    cam,
-                                                                    0.3f);
+    const auto [grad_weight3d, grad_pos3d, grad_scales3d, grad_rotations3d]
+        = dgmr::math::grad::splat<formulation>(weight3d,
+                                               pos3d,
+                                               scale3d,
+                                               rotation3d,
+                                               {grad_weight2d, grad_pos2d, grad_cov2},
+                                               cam,
+                                               0.3f);
 
     dL_dmeans[idx] = grad_pos3d;
+    dL_dscale[idx] = grad_scales3d;
+    dL_drot[idx] = glm::vec4(grad_rotations3d.w,
+                             grad_rotations3d.x,
+                             grad_rotations3d.y,
+                             grad_rotations3d.z);
 
     // Compute gradient updates due to computing colors from SHs
     if (shs)
@@ -304,19 +303,6 @@ __global__ void preprocessCUDA(
                            (glm::vec3 *) dL_dcolor,
                            (glm::vec3 *) dL_dmeans,
                            (glm::vec3 *) dL_dsh);
-
-    // Compute gradient updates due to computing covariance from scale/rotation
-    if (scales) {
-        computeCov3D(idx,
-                     scales[idx],
-                     scale_modifier,
-                     rotations[idx],
-                     &grad_cov3d[0],
-                     dL_dscale,
-                     dL_drot);
-    } else {
-        dL_dcov3D[idx] = grad_cov3d;
-    }
 
 #if defined(DGR_PHYSICAL_DENSITY)
     // const auto integr_of_exp = dgmr::math::integrate_exponential(scales3d);

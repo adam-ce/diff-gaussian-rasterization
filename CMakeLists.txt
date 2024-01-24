@@ -54,9 +54,9 @@ add_library(CudaRasterizer
     cuda_rasterizer/dgmr/grad/math.h
 )
 
-target_compile_definitions(CudaRasterizer INTERFACE GLM_FORCE_LEFT_HANDED)
+target_compile_definitions(CudaRasterizer PUBLIC GLM_FORCE_LEFT_HANDED GLM_ENABLE_EXPERIMENTAL)
 target_link_libraries(CudaRasterizer PUBLIC stroke)
 set_target_properties(CudaRasterizer PROPERTIES CUDA_ARCHITECTURES "75;86;90")
-target_compile_features(CudaRasterizer INTERFACE cxx_std_17)
+target_compile_features(CudaRasterizer PUBLIC cxx_std_17)
 target_include_directories(CudaRasterizer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/cuda_rasterizer)
 target_include_directories(CudaRasterizer PRIVATE ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
