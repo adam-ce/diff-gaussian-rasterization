@@ -243,7 +243,6 @@ __global__ void preprocessCUDA(
     auto idx = cg::this_grid().thread_rank();
     if (idx >= P || !(radii[idx] > 0))
         return;
-    const auto scales3d = scales[idx];
 
     const auto weight3d = opacities[idx];
     const glm::vec3 pos3d = means[idx];
@@ -275,12 +274,13 @@ __global__ void preprocessCUDA(
 
     const float grad_weight2d = dL_dopacity[idx];
     const glm::vec2 grad_pos2d = {dL_dmean2D[idx].x, dL_dmean2D[idx].y};
+    const auto grad_gaussian2d = dgmr::math::Gaussian2d<float>{grad_weight2d, grad_pos2d, grad_cov2};
     const auto [grad_weight3d, grad_pos3d, grad_scales3d, grad_rotations3d]
         = dgmr::math::grad::splat<formulation>(weight3d,
                                                pos3d,
                                                scale3d,
                                                rotation3d,
-                                               {grad_weight2d, grad_pos2d, grad_cov2},
+                                               grad_gaussian2d,
                                                cam,
                                                0.3f);
 
@@ -290,6 +290,7 @@ __global__ void preprocessCUDA(
                              grad_rotations3d.x,
                              grad_rotations3d.y,
                              grad_rotations3d.z);
+    dL_dopacity[idx] = grad_weight3d;
 
     // Compute gradient updates due to computing colors from SHs
     if (shs)
@@ -303,17 +304,6 @@ __global__ void preprocessCUDA(
                            (glm::vec3 *) dL_dcolor,
                            (glm::vec3 *) dL_dmeans,
                            (glm::vec3 *) dL_dsh);
-
-#if defined(DGR_PHYSICAL_DENSITY)
-    // const auto integr_of_exp = dgmr::math::integrate_exponential(scales3d);
-    // const auto weight3d = opacities[idx] * integr_of_exp;
-    dL_dopacity[idx] = grad_weight3d * integr_of_exp;
-    const auto grad_integr_of_exp = grad_weight3d * opacity;
-    const auto grad_scales3d = dgmr::math::grad::integrate_exponential(scales3d, grad_integr_of_exp);
-    dL_dscale[idx] += grad_scales3d; // must go after computeCov3D
-#else
-    dL_dopacity[idx] = grad_weight3d;
-#endif
 }
 
 // Backward version of the rendering procedure.
