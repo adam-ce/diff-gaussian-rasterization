@@ -28,7 +28,9 @@ setup(
             "ext.cpp"],
             extra_compile_args={"nvcc": [
                 "-I" + os.path.join(os.path.dirname(os.path.abspath(__file__))),
-                "-I" + os.path.join(os.path.dirname(os.path.abspath(__file__)), "gcem")]})
+                "-I" + os.path.join(os.path.dirname(os.path.abspath(__file__)), "gcem"),
+                "-DGLM_FORCE_LEFT_HANDED", "-DGLM_FORCE_QUAT_DATA_WXYZ", "-DGLM_ENABLE_EXPERIMENTAL"
+                ]})
         ],
     cmdclass={
         'build_ext': BuildExtension
