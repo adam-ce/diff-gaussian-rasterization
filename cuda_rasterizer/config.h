@@ -25,6 +25,6 @@
 //     Density = 2,
 //     Ots = 3 // Opacity thin side, view dependent, but scaled between 0 and 1
 // };
-#define DGR_FORMULATION 3
+#define DGR_FORMULATION 0
 
 #endif
