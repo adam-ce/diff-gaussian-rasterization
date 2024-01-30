@@ -102,32 +102,28 @@ make_jakobian(const glm::vec<3, scalar_t>& t, scalar_t l_prime, const glm::mat<3
     vec3_t grad_t = {};
     scalar_t grad_l_prime = 0;
     scalar_t grad_tz_tz = 0;
-    scalar_t tmp = 0;
 
     // focal_x / t.z
     grad_t.z = stroke::grad::divide_a_by_b(focal_x, t.z, incoming_grad[0][0]).right();
 
-    // (focal_x * t.x) / l_prime
-    stroke::grad::divide_a_by_b(focal_x * t.x, l_prime, incoming_grad[0][2]).addTo(&tmp, &grad_l_prime);
-    grad_t.x += tmp * focal_x;
+    // t.x / l_prime
+    stroke::grad::divide_a_by_b(t.x, l_prime, incoming_grad[0][2]).addTo(&grad_t.x, &grad_l_prime);
 
     // focal_y / t.z
     grad_t.z += stroke::grad::divide_a_by_b(focal_y, t.z, incoming_grad[1][1]).right();
 
-    // (focal_y * t.y) / l_prime
-    tmp = 0;
-    stroke::grad::divide_a_by_b(focal_y * t.y, l_prime, incoming_grad[1][2]).addTo(&tmp, &grad_l_prime);
-    grad_t.y += tmp * focal_y;
+    // t.y / l_prime
+    stroke::grad::divide_a_by_b(t.y, l_prime, incoming_grad[1][2]).addTo(&grad_t.y, &grad_l_prime);
 
-    // -(t.x) / (t.z * t.z)
-    tmp = 0;
-    stroke::grad::divide_a_by_b(-(t.x), t.z * t.z, incoming_grad[2][0]).addTo(&tmp, &grad_tz_tz);
-    grad_t.x += -tmp;
+    // -(focal_x * t.x) / (t.z * t.z)
+    scalar_t tmp = 0;
+    stroke::grad::divide_a_by_b(-(focal_x * t.x), t.z * t.z, incoming_grad[2][0]).addTo(&tmp, &grad_tz_tz);
+    grad_t.x += -tmp * focal_x;
 
-    // -(t.y) / (t.z * t.z)
+    // -(focal_y * t.y) / (t.z * t.z)
     tmp = 0;
-    stroke::grad::divide_a_by_b(-(t.y), t.z * t.z, incoming_grad[2][1]).addTo(&tmp, &grad_tz_tz);
-    grad_t.y += -tmp;
+    stroke::grad::divide_a_by_b(-(focal_y * t.y), t.z * t.z, incoming_grad[2][1]).addTo(&tmp, &grad_tz_tz);
+    grad_t.y += -tmp * focal_y;
 
     // t.z / l_prime
     stroke::grad::divide_a_by_b(t.z, l_prime, incoming_grad[2][2]).addTo(&grad_t.z, &grad_l_prime);
