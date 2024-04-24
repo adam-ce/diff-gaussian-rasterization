@@ -23,8 +23,9 @@
 //     Opacity = 0, // original
 //     Mass = 1,
 //     Density = 2,
-//     Ots = 3 // Opacity thin side, view dependent, but scaled between 0 and 1
+//     Ots = 3 // Opacity thin side, view dependent, but scaled between 0 and 1 when viewed along the shortest axis
+//     Ols = 4 // Opacity long side, view dependent, but scaled between 0 and 1 when viewed along the longest axis
 // };
-#define DGR_FORMULATION 0
+#define DGR_FORMULATION 4
 
 #endif
