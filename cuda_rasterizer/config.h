@@ -28,4 +28,6 @@
 // };
 #define DGR_FORMULATION 0
 
+// #define DGR_USE_EXP
+
 #endif

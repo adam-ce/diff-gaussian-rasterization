@@ -405,28 +405,41 @@ renderCUDA(
 				continue;
 
 			const float G = exp(power);
-            const float alpha = min(0.99f, con_o.w * G);
+#ifdef DGR_USE_EXP
+            float alpha = con_o.w * exp(power);
+#else
+            float alpha = min(0.99f, con_o.w * exp(power));
+#endif
             if (alpha < 1.0f / 255.0f)
                 continue;
 
-			T = T / (1.f - alpha);
-			const float dchannel_dcolor = alpha * T;
+#ifdef DGR_USE_EXP
+            T = T / stroke::exp(-alpha);
+#else
+            T = T / (1.f - alpha);
+#endif
+            const float dchannel_dcolor = alpha * T;
 
-			// Propagate gradients to per-Gaussian colors and keep
-			// gradients w.r.t. alpha (blending factor for a Gaussian/pixel
-			// pair).
-			float dL_dalpha = 0.0f;
-			const int global_id = collected_id[j];
-			for (int ch = 0; ch < C; ch++)
+            // Propagate gradients to per-Gaussian colors and keep
+            // gradients w.r.t. alpha (blending factor for a Gaussian/pixel
+            // pair).
+            float dL_dalpha = 0.0f;
+            const int global_id = collected_id[j];
+            for (int ch = 0; ch < C; ch++)
 			{
 				const float c = collected_colors[ch * BLOCK_SIZE + j];
 				// Update last color (to be used in the next iteration)
-				accum_rec[ch] = last_alpha * last_color[ch] + (1.f - last_alpha) * accum_rec[ch];
-				last_color[ch] = c;
+#ifdef DGR_USE_EXP
+                accum_rec[ch] = last_alpha * last_color[ch]
+                                + stroke::exp(-last_alpha) * accum_rec[ch];
+#else
+                accum_rec[ch] = last_alpha * last_color[ch] + (1.f - last_alpha) * accum_rec[ch];
+#endif
+                last_color[ch] = c;
 
-				const float dL_dchannel = dL_dpixel[ch];
-				dL_dalpha += (c - accum_rec[ch]) * dL_dchannel;
-				// Update the gradients w.r.t. color of the Gaussian. 
+                const float dL_dchannel = dL_dpixel[ch];
+                dL_dalpha += (c - accum_rec[ch]) * dL_dchannel;
+                // Update the gradients w.r.t. color of the Gaussian. 
 				// Atomic, since this pixel is just one of potentially
 				// many that were affected by this Gaussian.
 				atomicAdd(&(dL_dcolors[global_id * C + ch]), dchannel_dcolor * dL_dchannel);
@@ -440,15 +453,18 @@ renderCUDA(
 			float bg_dot_dpixel = 0;
 			for (int i = 0; i < C; i++)
 				bg_dot_dpixel += bg_color[i] * dL_dpixel[i];
-			dL_dalpha += (-T_final / (1.f - alpha)) * bg_dot_dpixel;
+#ifdef DGR_USE_EXP
+            dL_dalpha -= T_final * bg_dot_dpixel;
+#else
+            dL_dalpha += (-T_final / (1.f - alpha)) * bg_dot_dpixel;
             if (alpha >= 0.98999999f)
                 dL_dalpha = 0;
+#endif
 
-
-			// Helpful reusable temporary variables
-			const float dL_dG = con_o.w * dL_dalpha;
-			const float gdx = G * d.x;
-			const float gdy = G * d.y;
+            // Helpful reusable temporary variables
+            const float dL_dG = con_o.w * dL_dalpha;
+            const float gdx = G * d.x;
+            const float gdy = G * d.y;
 			const float dG_ddelx = -gdx * con_o.x - gdy * con_o.y;
 			const float dG_ddely = -gdy * con_o.z - gdx * con_o.y;
 
