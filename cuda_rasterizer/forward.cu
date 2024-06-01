@@ -327,43 +327,47 @@ renderCUDA(
                 // Avoid numerical instabilities (see paper appendix).
 #ifdef DGR_USE_EXP
             float alpha = con_o.w * exp(power);
+            // float alpha = min(0.99f, con_o.w * exp(power));
 #else
             float alpha = min(0.99f, con_o.w * exp(power));
 #endif
             if (alpha < 1.0f / 255.0f)
-				continue;
+                continue;
 #ifdef DGR_USE_EXP
             float test_T = T * stroke::exp(-alpha);
 #else
             float test_T = T * (1 - alpha);
 #endif
-            if (test_T < 0.0001f)
-			{
-				done = true;
-				continue;
-			}
+            if (test_T < 0.0001f) {
+                done = true;
+                continue;
+            }
 
-			// Eq. (3) from 3D Gaussian splatting paper.
-			for (int ch = 0; ch < CHANNELS; ch++)
-				C[ch] += features[collected_id[j] * CHANNELS + ch] * alpha * T;
+            // Eq. (3) from 3D Gaussian splatting paper.
+            for (int ch = 0; ch < CHANNELS; ch++)
+#ifdef DGR_USE_SELF_SHADOWING
+                C[ch] += features[collected_id[j] * CHANNELS + ch] * (1.f - stroke::exp(-alpha))
+                         * T;
+#else
+                C[ch] += features[collected_id[j] * CHANNELS + ch] * alpha * T;
+#endif
 
-			T = test_T;
+            T = test_T;
 
-			// Keep track of last range entry to update this
-			// pixel.
-			last_contributor = contributor;
-		}
-	}
+            // Keep track of last range entry to update this
+            // pixel.
+            last_contributor = contributor;
+        }
+    }
 
-	// All threads that treat valid pixel write out their final
-	// rendering data to the frame and auxiliary buffers.
-	if (inside)
-	{
-		final_T[pix_id] = T;
-		n_contrib[pix_id] = last_contributor;
-		for (int ch = 0; ch < CHANNELS; ch++)
-			out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch];
-	}
+    // All threads that treat valid pixel write out their final
+    // rendering data to the frame and auxiliary buffers.
+    if (inside) {
+        final_T[pix_id] = T;
+        n_contrib[pix_id] = last_contributor;
+        for (int ch = 0; ch < CHANNELS; ch++)
+            out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch];
+    }
 }
 
 void FORWARD::render(
