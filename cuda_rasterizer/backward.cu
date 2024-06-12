@@ -387,10 +387,12 @@ renderCUDA(
 		}
 		block.sync();
 
-		// Iterate over Gaussians
-		for (int j = 0; !done && j < min(BLOCK_SIZE, toDo); j++)
-		{
-			// Keep track of current Gaussian ID. Skip, if this one
+        if (done)
+            continue;
+
+        // Iterate over Gaussians
+        for (int j = 0; j < min(BLOCK_SIZE, toDo); j++) {
+            // Keep track of current Gaussian ID. Skip, if this one
 			// is behind the last contributor for this pixel.
 			contributor--;
 			if (contributor >= last_contributor)
@@ -406,9 +408,9 @@ renderCUDA(
 
 			const float G = exp(power);
 #ifdef DGR_USE_EXP
-            float alpha = con_o.w * exp(power);
+            float alpha = con_o.w * G;
 #else
-            float alpha = min(0.99f, con_o.w * exp(power));
+            float alpha = min(0.99f, con_o.w * G);
 #endif
             if (alpha < 1.0f / 255.0f)
                 continue;
@@ -479,8 +481,8 @@ renderCUDA(
 
 			// Update gradients w.r.t. opacity of the Gaussian
 			atomicAdd(&(dL_dopacity[global_id]), G * dL_dalpha);
-		}
-	}
+        }
+    }
 }
 
 void BACKWARD::preprocess(
