@@ -450,10 +450,15 @@ renderCUDA(
 			// Update last alpha (to be used in the next iteration)
 			last_alpha = alpha;
 
-			// Account for fact that alpha also influences how much of
-			// the background color is added if nothing left to blend
-			float bg_dot_dpixel = 0;
-			for (int i = 0; i < C; i++)
+#ifdef DGR_USE_SELF_SHADOWING
+            //(1.f - stroke::exp(-alpha))
+            dL_dalpha *= stroke::exp(-alpha);
+#endif
+
+            // Account for fact that alpha also influences how much of
+            // the background color is added if nothing left to blend
+            float bg_dot_dpixel = 0;
+            for (int i = 0; i < C; i++)
 				bg_dot_dpixel += bg_color[i] * dL_dpixel[i];
 #ifdef DGR_USE_EXP
             dL_dalpha -= T_final * bg_dot_dpixel;
