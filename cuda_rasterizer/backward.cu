@@ -433,9 +433,10 @@ renderCUDA(
 				// Update last color (to be used in the next iteration)
 #ifdef DGR_USE_EXP
                 accum_rec[ch] = last_alpha * last_color[ch]
-                                + stroke::exp(-last_alpha) * accum_rec[ch];
+                                + stroke::exp(-stroke::abs(last_alpha)) * accum_rec[ch];
 #else
-                accum_rec[ch] = last_alpha * last_color[ch] + (1.f - last_alpha) * accum_rec[ch];
+                accum_rec[ch] = last_alpha * last_color[ch]
+                                + (1.f - stroke::abs(last_alpha)) * accum_rec[ch];
 #endif
                 last_color[ch] = c;
 
