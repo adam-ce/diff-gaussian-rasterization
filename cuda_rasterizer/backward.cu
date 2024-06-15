@@ -307,23 +307,23 @@ __global__ void preprocessCUDA(
 }
 
 // Backward version of the rendering procedure.
-template <uint32_t C>
-__global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
-renderCUDA(
-	const uint2* __restrict__ ranges,
-	const uint32_t* __restrict__ point_list,
-	int W, int H,
-	const float* __restrict__ bg_color,
-	const float2* __restrict__ points_xy_image,
-	const float4* __restrict__ conic_opacity,
-	const float* __restrict__ colors,
-	const float* __restrict__ final_Ts,
-	const uint32_t* __restrict__ n_contrib,
-	const float* __restrict__ dL_dpixels,
-	float3* __restrict__ dL_dmean2D,
-	float4* __restrict__ dL_dconic2D,
-	float* __restrict__ dL_dopacity,
-	float* __restrict__ dL_dcolors)
+template<uint32_t C>
+__global__ void __launch_bounds__(BLOCK_X *BLOCK_Y)
+    renderCUDA(const uint2 *__restrict__ ranges,
+               const uint32_t *__restrict__ point_list,
+               int W,
+               int H,
+               const float *__restrict__ bg_color,
+               const float2 *__restrict__ points_xy_image,
+               const float4 *__restrict__ conic_opacity,
+               const float *__restrict__ colors,
+               const float *__restrict__ final_Ts,
+               const float *__restrict__ pixels,
+               const float *__restrict__ dL_dpixels,
+               float3 *__restrict__ dL_dmean2D,
+               float4 *__restrict__ dL_dconic2D,
+               float *__restrict__ dL_dopacity,
+               float *__restrict__ dL_dcolors)
 {
 	// We rasterize again. Compute necessary block info.
 	auto block = cg::this_thread_block();
@@ -347,130 +347,97 @@ renderCUDA(
 	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
 	__shared__ float collected_colors[C * BLOCK_SIZE];
 
-	// In the forward, we stored the final value for T, the
-	// product of all (1 - alpha) factors. 
-	const float T_final = inside ? final_Ts[pix_id] : 0;
-	float T = T_final;
+    float grad_current_colour[C];
+    float final_transparency = 0;
+    float grad_current_transparency = 0.0;
+    float current_colour[C];
 
-	// We start from the back. The ID of the last contributing
-	// Gaussian is known from each pixel from the forward.
-	uint32_t contributor = toDo;
-	const int last_contributor = inside ? n_contrib[pix_id] : 0;
+    // float accum_rec[C] = { 0 };
+    if (inside) {
+        final_transparency = final_Ts[pix_id];
+        for (int i = 0; i < C; i++) {
+            float final_colour = pixels[i * H * W + pix_id];
+            current_colour[i] = final_colour - final_transparency * bg_color[i];
+            grad_current_colour[i] = dL_dpixels[i * H * W + pix_id];
+            grad_current_transparency += grad_current_colour[i] * bg_color[i];
+        }
+    }
 
-	float accum_rec[C] = { 0 };
-	float dL_dpixel[C];
-	if (inside)
-		for (int i = 0; i < C; i++)
-			dL_dpixel[i] = dL_dpixels[i * H * W + pix_id];
+    float current_transparency = 1;
 
-	float last_alpha = 0;
-	float last_color[C] = { 0 };
+    // Gradient of pixel coordinate w.r.t. normalized
+    // screen-space viewport corrdinates (-1 to 1)
 
-	// Gradient of pixel coordinate w.r.t. normalized 
-	// screen-space viewport corrdinates (-1 to 1)
+    // Traverse all Gaussians
+    for (int i = 0; i < rounds; i++, toDo -= BLOCK_SIZE) {
+        // End if entire block votes that it is done rasterizing
+        int num_done = __syncthreads_count(done);
+        if (num_done == BLOCK_SIZE)
+            break;
 
-	// Traverse all Gaussians
-	for (int i = 0; i < rounds; i++, toDo -= BLOCK_SIZE)
-	{
-		// Load auxiliary data into shared memory, start in the BACK
-		// and load them in revers order.
-		block.sync();
-		const int progress = i * BLOCK_SIZE + block.thread_rank();
-		if (range.x + progress < range.y)
-		{
-			const int coll_id = point_list[range.y - progress - 1];
-			collected_id[block.thread_rank()] = coll_id;
-			collected_xy[block.thread_rank()] = points_xy_image[coll_id];
-			collected_conic_opacity[block.thread_rank()] = conic_opacity[coll_id];
-			for (int i = 0; i < C; i++)
-				collected_colors[i * BLOCK_SIZE + block.thread_rank()] = colors[coll_id * C + i];
-		}
-		block.sync();
+        // Collectively fetch per-Gaussian data from global to shared
+        int progress = i * BLOCK_SIZE + block.thread_rank();
+        if (range.x + progress < range.y) {
+            int coll_id = point_list[range.x + progress];
+            collected_id[block.thread_rank()] = coll_id;
+            collected_xy[block.thread_rank()] = points_xy_image[coll_id];
+            collected_conic_opacity[block.thread_rank()]
+                = conic_opacity[coll_id]; // 2d covariance (3 values) + weight
+        }
+        block.sync();
 
-        if (done)
-            continue;
-
-        // Iterate over Gaussians
-        for (int j = 0; j < min(BLOCK_SIZE, toDo); j++) {
-            // Keep track of current Gaussian ID. Skip, if this one
-			// is behind the last contributor for this pixel.
-			contributor--;
-			if (contributor >= last_contributor)
-				continue;
-
-			// Compute blending values, as before.
-			const float2 xy = collected_xy[j];
-			const float2 d = { xy.x - pixf.x, xy.y - pixf.y };
-			const float4 con_o = collected_conic_opacity[j];
-			const float power = -0.5f * (con_o.x * d.x * d.x + con_o.z * d.y * d.y) - con_o.y * d.x * d.y;
-			if (power > 0.0f)
-				continue;
-
-			const float G = exp(power);
-#ifdef DGR_USE_EXP
-            float alpha = con_o.w * G;
-#else
-            float alpha = min(0.99f, con_o.w * G);
-#endif
-            if (alpha < 1.0f / 255.0f)
+        // Iterate over current batch
+        for (int j = 0; !done && j < min(BLOCK_SIZE, toDo); j++) {
+            // Compute blending values, as before.
+            const float2 xy = collected_xy[j];
+            const float2 d = {xy.x - pixf.x, xy.y - pixf.y};
+            const float4 con_o = collected_conic_opacity[j];
+            const float power = -0.5f * (con_o.x * d.x * d.x + con_o.z * d.y * d.y)
+                                - con_o.y * d.x * d.y;
+            if (power > 0.0f)
                 continue;
 
+            const float G = exp(power);
 #ifdef DGR_USE_EXP
-            T = T / stroke::exp(-alpha);
+            float eval = con_o.w * G;
+            cosnt auto transparency_k = stroke::exp(-eval);
 #else
-            T = T / (1.f - alpha);
+            float eval = min(0.99f, con_o.w * G);
+            const auto transparency_k = (1 - eval);
 #endif
-            const float dchannel_dcolor = alpha * T;
+            if (eval < 1.0f / 255.0f)
+                continue;
+            const auto one_over_transparency_k = std::min(255.f, 1 / transparency_k);
 
             // Propagate gradients to per-Gaussian colors and keep
-            // gradients w.r.t. alpha (blending factor for a Gaussian/pixel
+            // gradients w.r.t. eval (blending factor for a Gaussian/pixel
             // pair).
-            float dL_dalpha = 0.0f;
+
+            // float grad_T = 0.f;
+            // float grad_eval = 0.f;
+
+            auto grad_transparency_k = final_transparency * one_over_transparency_k * grad_current_transparency;
             const int global_id = collected_id[j];
             for (int ch = 0; ch < C; ch++)
 			{
-				const float c = collected_colors[ch * BLOCK_SIZE + j];
-				// Update last color (to be used in the next iteration)
-#ifdef DGR_USE_EXP
-                accum_rec[ch] = last_alpha * last_color[ch]
-                                + stroke::exp(-stroke::abs(last_alpha)) * accum_rec[ch];
-#else
-                accum_rec[ch] = last_alpha * last_color[ch]
-                                + (1.f - stroke::abs(last_alpha)) * accum_rec[ch];
-#endif
-                last_color[ch] = c;
-
-                const float dL_dchannel = dL_dpixel[ch];
-                dL_dalpha += (c - accum_rec[ch]) * dL_dchannel;
-                // Update the gradients w.r.t. color of the Gaussian. 
-				// Atomic, since this pixel is just one of potentially
-				// many that were affected by this Gaussian.
-				atomicAdd(&(dL_dcolors[global_id * C + ch]), dchannel_dcolor * dL_dchannel);
-			}
-			dL_dalpha *= T;
-			// Update last alpha (to be used in the next iteration)
-			last_alpha = alpha;
+                const float c = collected_colors[ch * BLOCK_SIZE + j];
+                const auto c_delta = current_colour[ch] - c;
+                current_colour[ch] = c_delta * one_over_transparency_k;
 
 #ifdef DGR_USE_SELF_SHADOWING
-            //(1.f - stroke::exp(-alpha))
-            dL_dalpha *= stroke::exp(-alpha);
-#endif
-
-            // Account for fact that alpha also influences how much of
-            // the background color is added if nothing left to blend
-            float bg_dot_dpixel = 0;
-            for (int i = 0; i < C; i++)
-				bg_dot_dpixel += bg_color[i] * dL_dpixel[i];
-#ifdef DGR_USE_EXP
-            dL_dalpha -= T_final * bg_dot_dpixel;
+                // C[ch] += features[collected_id[j] * CHANNELS + ch] * ;
+                atomicAdd(&(dL_dcolors[global_id * C + ch]), grad_current_colour * (1.f - stroke::exp(-eval)) * T);
 #else
-            dL_dalpha += (-T_final / (1.f - alpha)) * bg_dot_dpixel;
-            if (alpha >= 0.98999999f)
-                dL_dalpha = 0;
+
+                grad_transparency_k += grad_current_colour[ch] * current_colour[ch] * current_transparency;
+
+                atomicAdd(&(dL_dcolors[global_id * C + ch]), grad_current_colour[ch] * eval * current_transparency);
 #endif
+            }
+            const auto grad_eval = -grad_transparency_k;
 
             // Helpful reusable temporary variables
-            const float dL_dG = con_o.w * dL_dalpha;
+            const float dL_dG = con_o.w * grad_eval;
             const float gdx = G * d.x;
             const float gdy = G * d.y;
 			const float dG_ddelx = -gdx * con_o.x - gdy * con_o.y;
@@ -486,7 +453,13 @@ renderCUDA(
 			atomicAdd(&dL_dconic2D[global_id].w, -0.5f * gdy * d.y * dL_dG);
 
 			// Update gradients w.r.t. opacity of the Gaussian
-			atomicAdd(&(dL_dopacity[global_id]), G * dL_dalpha);
+            atomicAdd(&(dL_dopacity[global_id]), G * grad_eval);
+
+            current_transparency *= transparency_k;
+            if (current_transparency < 0.0001f) {
+                done = true;
+                continue;
+            }
         }
     }
 }
@@ -557,7 +530,7 @@ void BACKWARD::render(
 	const float4* conic_opacity,
 	const float* colors,
 	const float* final_Ts,
-	const uint32_t* n_contrib,
+	const float* pixels,
 	const float* dL_dpixels,
 	float3* dL_dmean2D,
 	float4* dL_dconic2D,
@@ -573,7 +546,7 @@ void BACKWARD::render(
 		conic_opacity,
 		colors,
 		final_Ts,
-		n_contrib,
+		pixels,
 		dL_dpixels,
 		dL_dmean2D,
 		dL_dconic2D,

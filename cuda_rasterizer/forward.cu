@@ -325,34 +325,31 @@ renderCUDA(
                 // Obtain alpha by multiplying with Gaussian opacity
                 // and its exponential falloff from mean.
                 // Avoid numerical instabilities (see paper appendix).
+
+            const float G = exp(power);
 #ifdef DGR_USE_EXP
-            float alpha = con_o.w * exp(power);
-            // float alpha = min(0.99f, con_o.w * exp(power));
+            float eval = con_o.w * G;
+            const auto transparency_k = stroke::exp(-eval);
 #else
-            float alpha = min(0.99f, con_o.w * exp(power));
+            float eval = min(0.99f, con_o.w * G);
+            const auto transparency_k = (1 - eval);
 #endif
-            if (alpha < 1.0f / 255.0f)
+            if (eval < 1.0f / 255.0f)
                 continue;
-#ifdef DGR_USE_EXP
-            float test_T = T * stroke::exp(-alpha);
-#else
-            float test_T = T * (1 - alpha);
-#endif
-            if (test_T < 0.0001f) {
-                done = true;
-                continue;
-            }
 
             // Eq. (3) from 3D Gaussian splatting paper.
             for (int ch = 0; ch < CHANNELS; ch++)
 #ifdef DGR_USE_SELF_SHADOWING
-                C[ch] += features[collected_id[j] * CHANNELS + ch] * (1.f - stroke::exp(-alpha))
-                         * T;
+                C[ch] += features[collected_id[j] * CHANNELS + ch] * (1.f - stroke::exp(-eval)) * T;
 #else
-                C[ch] += features[collected_id[j] * CHANNELS + ch] * alpha * T;
+                C[ch] += features[collected_id[j] * CHANNELS + ch] * eval * T;
 #endif
 
-            T = test_T;
+            T *= transparency_k;
+            if (T < 0.0001f) {
+                done = true;
+                continue;
+            }
 
             // Keep track of last range entry to update this
             // pixel.
