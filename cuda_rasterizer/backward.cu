@@ -400,7 +400,7 @@ __global__ void __launch_bounds__(BLOCK_X *BLOCK_Y)
             const float G = exp(power);
 #ifdef DGR_USE_EXP
             float eval = con_o.w * G;
-            cosnt auto transparency_k = stroke::exp(-eval);
+            const auto transparency_k = stroke::exp(-eval);
 #else
             float eval = min(0.99f, con_o.w * G);
             const auto transparency_k = (1 - eval);
@@ -426,7 +426,7 @@ __global__ void __launch_bounds__(BLOCK_X *BLOCK_Y)
 
 #ifdef DGR_USE_SELF_SHADOWING
                 // C[ch] += features[collected_id[j] * CHANNELS + ch] * ;
-                atomicAdd(&(dL_dcolors[global_id * C + ch]), grad_current_colour * (1.f - stroke::exp(-eval)) * T);
+                atomicAdd(&(dL_dcolors[global_id * C + ch]), grad_current_colour[ch] * (1.f - stroke::exp(-eval)) * current_transparency);
 #else
 
                 grad_transparency_k += grad_current_colour[ch] * current_colour[ch] * current_transparency;
