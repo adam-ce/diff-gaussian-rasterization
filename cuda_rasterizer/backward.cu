@@ -307,7 +307,7 @@ __global__ void preprocessCUDA(
 }
 
 // Backward version of the rendering procedure.
-template<uint32_t C>
+template<uint32_t N_CHANNELS>
 __global__ void __launch_bounds__(BLOCK_X *BLOCK_Y)
     renderCUDA(const uint2 *__restrict__ ranges,
                const uint32_t *__restrict__ point_list,
@@ -345,21 +345,21 @@ __global__ void __launch_bounds__(BLOCK_X *BLOCK_Y)
 	__shared__ int collected_id[BLOCK_SIZE];
 	__shared__ float2 collected_xy[BLOCK_SIZE];
 	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
-	__shared__ float collected_colors[C * BLOCK_SIZE];
+	__shared__ float collected_colors[N_CHANNELS * BLOCK_SIZE];
 
-    float grad_current_colour[C];
+    float grad_colour[N_CHANNELS];
     float final_transparency = 0;
-    float grad_current_transparency = 0.0;
-    float current_colour[C];
+    float grad_transparency = 0.0;
+    float current_colour[N_CHANNELS];
 
-    // float accum_rec[C] = { 0 };
+    // float accum_rec[N_CHANNELS] = { 0 };
     if (inside) {
         final_transparency = final_Ts[pix_id];
-        for (int i = 0; i < C; i++) {
+        for (int i = 0; i < N_CHANNELS; i++) {
             float final_colour = pixels[i * H * W + pix_id];
             current_colour[i] = final_colour - final_transparency * bg_color[i];
-            grad_current_colour[i] = dL_dpixels[i * H * W + pix_id];
-            grad_current_transparency += grad_current_colour[i] * bg_color[i];
+            grad_colour[i] = dL_dpixels[i * H * W + pix_id];
+            grad_transparency += grad_colour[i] * bg_color[i];
         }
     }
 
@@ -416,9 +416,9 @@ __global__ void __launch_bounds__(BLOCK_X *BLOCK_Y)
             // float grad_T = 0.f;
             // float grad_eval = 0.f;
 
-            auto grad_transparency_k = final_transparency * one_over_transparency_k * grad_current_transparency;
+            auto grad_transparency_k = final_transparency * one_over_transparency_k * grad_transparency;
             const int global_id = collected_id[j];
-            for (int ch = 0; ch < C; ch++)
+            for (int ch = 0; ch < N_CHANNELS; ch++)
 			{
                 const float c = collected_colors[ch * BLOCK_SIZE + j];
                 const auto c_delta = current_colour[ch] - c;
@@ -426,15 +426,19 @@ __global__ void __launch_bounds__(BLOCK_X *BLOCK_Y)
 
 #ifdef DGR_USE_SELF_SHADOWING
                 // C[ch] += features[collected_id[j] * CHANNELS + ch] * ;
-                atomicAdd(&(dL_dcolors[global_id * C + ch]), grad_current_colour[ch] * (1.f - stroke::exp(-eval)) * current_transparency);
+                atomicAdd(&(dL_dcolors[global_id * N_CHANNELS + ch]), grad_colour[ch] * (1.f - stroke::exp(-eval)) * current_transparency);
 #else
 
-                grad_transparency_k += grad_current_colour[ch] * current_colour[ch] * current_transparency;
+                grad_transparency_k += grad_colour[ch] * current_colour[ch] * current_transparency;
 
-                atomicAdd(&(dL_dcolors[global_id * C + ch]), grad_current_colour[ch] * eval * current_transparency);
+                atomicAdd(&(dL_dcolors[global_id * N_CHANNELS + ch]), grad_colour[ch] * eval * current_transparency);
 #endif
             }
+#ifdef DGR_USE_EXP
             const auto grad_eval = -grad_transparency_k;
+#else
+            const auto grad_eval = ((con_o.w * G) >= 0.99f) ? 0.f : -grad_transparency_k;
+#endif
 
             // Helpful reusable temporary variables
             const float dL_dG = con_o.w * grad_eval;
