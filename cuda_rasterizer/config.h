@@ -16,7 +16,6 @@
 #define BLOCK_X 16
 #define BLOCK_Y 16
 
-// #define DGR_FIX_AA
 #define DGR_DIST_BASED_SORTING
 
 // enum class Formulation : int {
@@ -26,9 +25,10 @@
 //     Ots = 3 // Opacity thin side, view dependent, but scaled between 0 and 1 when viewed along the shortest axis
 //     Ols = 4 // Opacity long side, view dependent, but scaled between 0 and 1 when viewed along the longest axis
 // };
-#define DGR_FORMULATION 3
+#define DGR_FORMULATION 0
 
-// #define DGR_USE_EXP
-// #define DGR_USE_SELF_SHADOWING
+#if DGR_FORMULATION > 0
+// #define DGR_USE_EXP_AND_SELF_SHADOWING
+#endif
 
 #endif

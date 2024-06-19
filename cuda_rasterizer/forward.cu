@@ -327,33 +327,33 @@ renderCUDA(
                 // Avoid numerical instabilities (see paper appendix).
 
             const float G = exp(power);
-#ifdef DGR_USE_EXP
-            float eval = con_o.w * G;
-            const auto transparency_k = stroke::exp(-eval);
+            float pure_eval = con_o.w * G;
+#ifdef DGR_USE_EXP_AND_SELF_SHADOWING
+            const float exp_neg_eval = stroke::exp(-pure_eval);
+            const float effective_eval = 1.f - exp_neg_eval;
+            const auto transparency_k = exp_neg_eval;
 #else
-            float eval = min(0.99f, con_o.w * G);
-            const auto transparency_k = (1 - eval);
+            float effective_eval = min(0.99f, pure_eval);
+            const auto transparency_k = (1 - effective_eval);
 #endif
-            if (eval < 1.0f / 255.0f)
+            if (effective_eval < 1.0f / 255.0f)
                 continue;
 
             // Eq. (3) from 3D Gaussian splatting paper.
-            for (int ch = 0; ch < CHANNELS; ch++)
-#ifdef DGR_USE_SELF_SHADOWING
-                C[ch] += features[collected_id[j] * CHANNELS + ch] * (1.f - stroke::exp(-eval)) * T;
-#else
-                C[ch] += features[collected_id[j] * CHANNELS + ch] * eval * T;
-#endif
-
-            T *= transparency_k;
-            if (T < 0.0001f) {
-                done = true;
-                continue;
+            for (int ch = 0; ch < CHANNELS; ch++) {
+                const auto effective_colour = features[collected_id[j] * CHANNELS + ch] * effective_eval;
+                C[ch] += effective_colour * T;
             }
 
             // Keep track of last range entry to update this
             // pixel.
             last_contributor = contributor;
+
+            T *= transparency_k;
+            if (T < 0.0001f) {
+                done = true;
+                break;
+            }
         }
     }
 

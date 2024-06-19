@@ -141,73 +141,6 @@ __device__ void computeColorFromSH(int idx, int deg, int max_coeffs, const glm::
 
 __device__ __forceinline__ float sq(float x) { return x * x; }
 
-// clang-format off
-// Backward pass for the conversion of scale and rotation to a 
-// 3D covariance matrix for each Gaussian. 
-__device__ void computeCov3D(int idx, const glm::vec3 scale, float mod, const glm::vec4 rot, const float* dL_dcov3D, glm::vec3* dL_dscales, glm::vec4* dL_drots)
-{
-	// Recompute (intermediate) results for the 3D covariance computation.
-	glm::vec4 q = rot;// / glm::length(rot);
-	float r = q.x;
-	float x = q.y;
-	float y = q.z;
-	float z = q.w;
-
-	glm::mat3 R = glm::mat3(
-		1.f - 2.f * (y * y + z * z), 2.f * (x * y - r * z), 2.f * (x * z + r * y),
-		2.f * (x * y + r * z), 1.f - 2.f * (x * x + z * z), 2.f * (y * z - r * x),
-		2.f * (x * z - r * y), 2.f * (y * z + r * x), 1.f - 2.f * (x * x + y * y)
-	);
-
-	glm::mat3 S = glm::mat3(1.0f);
-
-	glm::vec3 s = mod * scale;
-	S[0][0] = s.x;
-	S[1][1] = s.y;
-	S[2][2] = s.z;
-
-	glm::mat3 M = S * R;
-
-
-	glm::vec3 dunc(dL_dcov3D[0], dL_dcov3D[3], dL_dcov3D[5]);
-	glm::vec3 ounc = 0.5f * glm::vec3(dL_dcov3D[1], dL_dcov3D[2], dL_dcov3D[4]);
-
-	// Convert per-element covariance loss gradients to matrix form
-	glm::mat3 dL_dSigma = glm::mat3(
-		dL_dcov3D[0], 0.5f * dL_dcov3D[1], 0.5f * dL_dcov3D[2],
-		0.5f * dL_dcov3D[1], dL_dcov3D[3], 0.5f * dL_dcov3D[4],
-		0.5f * dL_dcov3D[2], 0.5f * dL_dcov3D[4], dL_dcov3D[5]
-	);
-
-	// Compute loss gradient w.r.t. matrix M
-	// dSigma_dM = 2 * M
-	glm::mat3 dL_dM = 2.0f * M * dL_dSigma;
-
-	glm::mat3 Rt = glm::transpose(R);
-	glm::mat3 dL_dMt = glm::transpose(dL_dM);
-
-	// Gradients of loss w.r.t. scale
-	glm::vec3* dL_dscale = dL_dscales + idx;
-	dL_dscale->x = glm::dot(Rt[0], dL_dMt[0]);
-	dL_dscale->y = glm::dot(Rt[1], dL_dMt[1]);
-	dL_dscale->z = glm::dot(Rt[2], dL_dMt[2]);
-
-	dL_dMt[0] *= s.x;
-	dL_dMt[1] *= s.y;
-	dL_dMt[2] *= s.z;
-
-	// Gradients of loss w.r.t. normalized quaternion
-	glm::vec4 dL_dq;
-	dL_dq.x = 2 * z * (dL_dMt[0][1] - dL_dMt[1][0]) + 2 * y * (dL_dMt[2][0] - dL_dMt[0][2]) + 2 * x * (dL_dMt[1][2] - dL_dMt[2][1]);
-	dL_dq.y = 2 * y * (dL_dMt[1][0] + dL_dMt[0][1]) + 2 * z * (dL_dMt[2][0] + dL_dMt[0][2]) + 2 * r * (dL_dMt[1][2] - dL_dMt[2][1]) - 4 * x * (dL_dMt[2][2] + dL_dMt[1][1]);
-	dL_dq.z = 2 * x * (dL_dMt[1][0] + dL_dMt[0][1]) + 2 * r * (dL_dMt[2][0] - dL_dMt[0][2]) + 2 * z * (dL_dMt[1][2] + dL_dMt[2][1]) - 4 * y * (dL_dMt[2][2] + dL_dMt[0][0]);
-	dL_dq.w = 2 * r * (dL_dMt[0][1] - dL_dMt[1][0]) + 2 * x * (dL_dMt[2][0] + dL_dMt[0][2]) + 2 * y * (dL_dMt[1][2] + dL_dMt[2][1]) - 4 * z * (dL_dMt[1][1] + dL_dMt[0][0]);
-
-	// Gradients of loss w.r.t. unnormalized quaternion
-	float4* dL_drot = (float4*)(dL_drots + idx);
-	*dL_drot = float4{ dL_dq.x, dL_dq.y, dL_dq.z, dL_dq.w };//dnormvdv(float4{ rot.x, rot.y, rot.z, rot.w }, float4{ dL_dq.x, dL_dq.y, dL_dq.z, dL_dq.w });
-}
-
 // Backward pass of the preprocessing steps
 // clang-format off
 template<int C>
@@ -261,8 +194,7 @@ __global__ void preprocessCUDA(
     cam.view_matrix = *reinterpret_cast<const glm::mat4 *>(view_matrix);
     cam.view_projection_matrix = *reinterpret_cast<const glm::mat4 *>(proj);
 
-    const dgmr::math::Gaussian2d<float> g2d
-        = dgmr::math::splat<formulation>(weight3d, pos3d, scale3d, rotation3d, cam, 0.3f);
+    const dgmr::math::Gaussian2d<float> g2d = dgmr::math::splat<formulation>(weight3d, pos3d, scale3d, rotation3d, cam, 0.3f);
     if (det(g2d.cov) == 0.0f)
         return;
 
@@ -325,6 +257,8 @@ __global__ void __launch_bounds__(BLOCK_X *BLOCK_Y)
                float *__restrict__ dL_dopacity,
                float *__restrict__ dL_dcolors)
 {
+    using scalar_t = float;
+
 	// We rasterize again. Compute necessary block info.
 	auto block = cg::this_thread_block();
 	const uint32_t horizontal_blocks = (W + BLOCK_X - 1) / BLOCK_X;
@@ -349,10 +283,9 @@ __global__ void __launch_bounds__(BLOCK_X *BLOCK_Y)
 
     float grad_colour[N_CHANNELS];
     float final_transparency = 0;
-    float grad_transparency = 0.0;
+    float grad_transparency = 0;
     float current_colour[N_CHANNELS];
 
-    // float accum_rec[N_CHANNELS] = { 0 };
     if (inside) {
         final_transparency = final_Ts[pix_id];
         for (int i = 0; i < N_CHANNELS; i++) {
@@ -381,8 +314,9 @@ __global__ void __launch_bounds__(BLOCK_X *BLOCK_Y)
             int coll_id = point_list[range.x + progress];
             collected_id[block.thread_rank()] = coll_id;
             collected_xy[block.thread_rank()] = points_xy_image[coll_id];
-            collected_conic_opacity[block.thread_rank()]
-                = conic_opacity[coll_id]; // 2d covariance (3 values) + weight
+            collected_conic_opacity[block.thread_rank()] = conic_opacity[coll_id]; // 2d covariance (3 values) + weight
+            for (int i = 0; i < N_CHANNELS; i++)
+                collected_colors[i * BLOCK_SIZE + block.thread_rank()] = colors[coll_id * N_CHANNELS + i];
         }
         block.sync();
 
@@ -398,14 +332,16 @@ __global__ void __launch_bounds__(BLOCK_X *BLOCK_Y)
                 continue;
 
             const float G = exp(power);
-#ifdef DGR_USE_EXP
-            float eval = con_o.w * G;
-            const auto transparency_k = stroke::exp(-eval);
+            float pure_eval = con_o.w * G;
+#ifdef DGR_USE_EXP_AND_SELF_SHADOWING
+            const float exp_neg_eval = stroke::exp(-pure_eval);
+            const float effective_eval = 1.f - exp_neg_eval;
+            const auto transparency_k = exp_neg_eval;
 #else
-            float eval = min(0.99f, con_o.w * G);
-            const auto transparency_k = (1 - eval);
+            float effective_eval = min(0.99f, pure_eval);
+            const auto transparency_k = (1 - effective_eval);
 #endif
-            if (eval < 1.0f / 255.0f)
+            if (effective_eval < 1.0f / 255.0f)
                 continue;
             const auto one_over_transparency_k = std::min(255.f, 1 / transparency_k);
 
@@ -417,31 +353,30 @@ __global__ void __launch_bounds__(BLOCK_X *BLOCK_Y)
             // float grad_eval = 0.f;
 
             auto grad_transparency_k = final_transparency * one_over_transparency_k * grad_transparency;
+            auto grad_effective_eval = 0.f;
             const int global_id = collected_id[j];
             for (int ch = 0; ch < N_CHANNELS; ch++)
 			{
                 const float c = collected_colors[ch * BLOCK_SIZE + j];
-                const auto c_delta = current_colour[ch] - c;
+                const float effective_colour = c * effective_eval;
+
+                const auto c_delta = current_colour[ch] - effective_colour;
                 current_colour[ch] = c_delta * one_over_transparency_k;
-
-#ifdef DGR_USE_SELF_SHADOWING
-                // C[ch] += features[collected_id[j] * CHANNELS + ch] * ;
-                atomicAdd(&(dL_dcolors[global_id * N_CHANNELS + ch]), grad_colour[ch] * (1.f - stroke::exp(-eval)) * current_transparency);
-#else
-
                 grad_transparency_k += grad_colour[ch] * current_colour[ch] * current_transparency;
-
-                atomicAdd(&(dL_dcolors[global_id * N_CHANNELS + ch]), grad_colour[ch] * eval * current_transparency);
-#endif
+                const auto grad_effective_colour = grad_colour[ch] * current_transparency;
+                grad_effective_eval += grad_effective_colour * c;
+                atomicAdd(&(dL_dcolors[global_id * N_CHANNELS + ch]), grad_effective_colour * effective_eval);
             }
-#ifdef DGR_USE_EXP
-            const auto grad_eval = -grad_transparency_k;
+#ifdef DGR_USE_EXP_AND_SELF_SHADOWING
+            const auto grad_exp_neg_eval = grad_transparency_k - grad_effective_eval;
+            const auto grad_pure_eval = - grad_exp_neg_eval * stroke::exp(-pure_eval);
 #else
-            const auto grad_eval = ((con_o.w * G) >= 0.99f) ? 0.f : -grad_transparency_k;
+            grad_effective_eval += -grad_transparency_k;
+            const auto grad_pure_eval = ((con_o.w * G) >= 0.99f) ? 0.f : grad_effective_eval;
 #endif
 
             // Helpful reusable temporary variables
-            const float dL_dG = con_o.w * grad_eval;
+            const float dL_dG = con_o.w * grad_pure_eval;
             const float gdx = G * d.x;
             const float gdy = G * d.y;
 			const float dG_ddelx = -gdx * con_o.x - gdy * con_o.y;
@@ -453,16 +388,16 @@ __global__ void __launch_bounds__(BLOCK_X *BLOCK_Y)
 
 			// Update gradients w.r.t. 2D covariance (2x2 matrix, symmetric)
 			atomicAdd(&dL_dconic2D[global_id].x, -0.5f * gdx * d.x * dL_dG);
-			atomicAdd(&dL_dconic2D[global_id].y, -0.5f * gdx * d.y * dL_dG);
+			atomicAdd(&dL_dconic2D[global_id].y, -1.0f * gdx * d.y * dL_dG);
 			atomicAdd(&dL_dconic2D[global_id].w, -0.5f * gdy * d.y * dL_dG);
 
 			// Update gradients w.r.t. opacity of the Gaussian
-            atomicAdd(&(dL_dopacity[global_id]), G * grad_eval);
+            atomicAdd(&(dL_dopacity[global_id]), G * grad_pure_eval);
 
             current_transparency *= transparency_k;
             if (current_transparency < 0.0001f) {
                 done = true;
-                continue;
+                break;
             }
         }
     }
