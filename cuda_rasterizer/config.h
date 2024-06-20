@@ -16,7 +16,7 @@
 #define BLOCK_X 16
 #define BLOCK_Y 16
 
-#define DGR_DIST_BASED_SORTING
+// #define DGR_DIST_BASED_SORTING
 
 // enum class Formulation : int {
 //     Opacity = 0, // original
